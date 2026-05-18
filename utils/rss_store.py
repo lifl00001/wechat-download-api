@@ -491,23 +491,46 @@ def get_active_blacklist_fakeids() -> List[str]:
 
 def increment_verification_count(fakeid: str, nickname: str = "") -> int:
     """
-    增加验证码触发次数，自动加入黑名单（超过阈值时）
-    返回当前触发次数
+    增加验证码触发次数，达到阈值时自动加入黑名单
+
+    [2026-05-18 优化]
+    1. 阈值 5 → 8（避免误判，配合精确化 verification 检测后误报率本就低）
+    2. 修复隐藏 bug：之前 UPDATE 强制 is_active=1 → admin 手动取消后，下次触发又被自动激活
+       现在：仅在「跨阈值的瞬间」激活；已激活/已被 admin 取消的状态保持不变
+
+    注意：本计数为永久累计（无 24h 窗口）。误判的 fakeid 可通过 remove_from_blacklist
+    或 delete_blacklist_record 手动清理（开源版简化设计，不引入 PG/Redis）
+
+    返回：当前触发次数
     """
-    threshold = 5  # 触发5次自动加入黑名单
+    threshold = 8
     conn = _get_conn()
     try:
         row = conn.execute(
             "SELECT * FROM fakeid_blacklist WHERE fakeid=?", (fakeid,)
         ).fetchone()
-        
+
         if row:
             new_count = row["verification_count"] + 1
-            conn.execute(
-                "UPDATE fakeid_blacklist SET verification_count=?, is_active=1, "
-                "blacklisted_at=? WHERE fakeid=?",
-                (new_count, int(time.time()), fakeid),
+            crossing_threshold = (
+                row["verification_count"] < threshold <= new_count
+                and not row["is_active"]
             )
+            if crossing_threshold:
+                # 首次跨过阈值：激活拉黑
+                conn.execute(
+                    "UPDATE fakeid_blacklist SET verification_count=?, is_active=1, "
+                    "blacklisted_at=?, note=? WHERE fakeid=?",
+                    (new_count, int(time.time()),
+                     f"自动记录: 触发验证码 {new_count} 次（达到阈值 {threshold}）",
+                     fakeid),
+                )
+            else:
+                # 仅累计计数，不动 is_active（保留 admin 手动取消的状态）
+                conn.execute(
+                    "UPDATE fakeid_blacklist SET verification_count=? WHERE fakeid=?",
+                    (new_count, fakeid),
+                )
         else:
             new_count = 1
             conn.execute(
@@ -519,13 +542,13 @@ def increment_verification_count(fakeid: str, nickname: str = "") -> int:
                  int(time.time()),
                  f"自动记录: 触发验证码 {new_count} 次"),
             )
-        
+
         conn.commit()
-        
+
         if new_count >= threshold:
-            logger.warning("Auto-blacklisted %s after %d verification triggers", 
-                          fakeid[:8], new_count)
-        
+            logger.warning("Fakeid %s reached %d verification triggers (threshold=%d)",
+                          fakeid[:8], new_count, threshold)
+
         return new_count
     finally:
         conn.close()

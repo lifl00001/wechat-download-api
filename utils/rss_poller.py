@@ -30,12 +30,24 @@ ARTICLES_PER_POLL = int(os.getenv("ARTICLES_PER_POLL", "10"))
 FETCH_FULL_CONTENT = os.getenv("RSS_FETCH_FULL_CONTENT", "true").lower() == "true"
 
 
+class WechatInvalidFakeidError(Exception):
+    """
+    [2026-05-18] 公众号在微信侧已失效（已注销/改名/重新注册）
+
+    触发条件：appmsgpublish 接口返回 ret=200002 且 err_msg="invalid args"
+    实测：任何 token+cookie 都无法访问，需要标记为永久失效
+    """
+    pass
+
+
 class RSSPoller:
     """后台轮询单例"""
 
     _instance = None
     _task: Optional[asyncio.Task] = None
     _running = False
+    # [2026-05-15 OS-4] 共享 httpx.AsyncClient 避免每轮每 fakeid 都新建（省 DNS+TLS 握手）
+    _http_client: Optional[httpx.AsyncClient] = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -46,6 +58,11 @@ class RSSPoller:
         if self._running:
             return
         self._running = True
+        # 创建长连接 client，连接池 + keep-alive 自动复用
+        self._http_client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+        )
         self._task = asyncio.create_task(self._loop())
         logger.info("RSS poller started (interval=%ds)", POLL_INTERVAL)
 
@@ -57,6 +74,13 @@ class RSSPoller:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # 关闭共享 client
+        if self._http_client is not None:
+            try:
+                await self._http_client.aclose()
+            except Exception:
+                pass
+            self._http_client = None
         logger.info("RSS poller stopped")
 
     @property
@@ -100,13 +124,26 @@ class RSSPoller:
                 if articles and FETCH_FULL_CONTENT:
                     # 获取完整文章内容
                     articles = await self._enrich_articles_content(fakeid, articles)
-                
+
                 if articles:
                     # 轮询器拉取的文章标记为 'poll'
                     new_count = rss_store.save_articles(fakeid, articles, source='poll')
                     if new_count > 0:
                         logger.info("RSS: %d new articles for %s", new_count, fakeid[:8])
                 rss_store.update_last_poll(fakeid)
+            except WechatInvalidFakeidError as e:
+                # [2026-05-18] 同步 SaaS 修复：fakeid 在微信侧已失效，自动加入黑名单
+                # 取该 fakeid 的 nickname（如果数据库里有）便于后续运维查看
+                sub = rss_store.get_subscription(fakeid)
+                nickname = sub.get("nickname", "") if sub else ""
+                logger.warning("Fakeid %s (%s) is invalid on WeChat, adding to blacklist", fakeid[:8], nickname)
+                try:
+                    rss_store.add_to_blacklist(
+                        fakeid, nickname=nickname, reason="invalid_fakeid",
+                        note="[2026-05-18] 微信侧返回 invalid args，fakeid 已失效（注销/改名/重新注册）",
+                    )
+                except Exception as bl_err:
+                    logger.warning("Failed to blacklist invalid fakeid %s: %s", fakeid[:8], bl_err)
             except Exception as e:
                 logger.error("RSS poll error for %s: %s", fakeid[:8], e)
             await asyncio.sleep(3)
@@ -133,19 +170,39 @@ class RSSPoller:
             "Cookie": creds["cookie"],
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
+        # [2026-05-15 OS-4] 使用共享 client，省 DNS+TLS 握手
+        # 兜底：若 client 未初始化（理论不会发生），退回到每次新建
+        if self._http_client is not None:
+            resp = await self._http_client.get(
                 "https://mp.weixin.qq.com/cgi-bin/appmsgpublish",
                 params=params,
                 headers=headers,
             )
             resp.raise_for_status()
             result = resp.json()
+        else:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    "https://mp.weixin.qq.com/cgi-bin/appmsgpublish",
+                    params=params,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                result = resp.json()
 
         base_resp = result.get("base_resp", {})
         if base_resp.get("ret") != 0:
-            logger.warning("WeChat API error for %s: ret=%s",
-                           fakeid[:8], base_resp.get("ret"))
+            ret_code = base_resp.get("ret")
+            err_msg = base_resp.get("err_msg", "")
+            logger.warning("WeChat API error for %s: ret=%s err_msg=%r",
+                           fakeid[:8], ret_code, err_msg)
+            # [2026-05-18] 同步 SaaS 修复：ret=200002 + "invalid args" → fakeid 已失效
+            # 老代码统一返回空 → 静默失败，用户感受不到该号已注销
+            # 现在：抛 WechatInvalidFakeidError 让调用方加入黑名单
+            if ret_code == 200002 and "invalid arg" in err_msg.lower():
+                raise WechatInvalidFakeidError(
+                    f"fakeid {fakeid[:8]} 已失效（注销/改名）: {err_msg}"
+                )
             return []
 
         publish_page = result.get("publish_page", {})
@@ -241,12 +298,23 @@ class RSSPoller:
                 enriched.append(article)
                 continue
             
-            # 检测验证码触发，记录到黑名单统计
-            if "验证" in html or "环境异常" in html:
+            # [2026-05-18] 精确化验证码检测（之前用 "验证" 二字误伤大量正文含此字的文章）
+            # 微信风控页特有标记：
+            #   1. verifycode 出现在 URL/form/script 中（最强信号）
+            #   2. "请输入图片中的字符" — 微信原版验证码提示文案
+            #   3. "环境异常" — 微信明确风控提示（保留原检测）
+            # 移除单纯的"验证"二字判断 — 文章正文里出现概率高，会导致 content 丢失
+            html_lower = html.lower()
+            verification_markers = (
+                "verifycode" in html_lower
+                or "请输入图片中的字符" in html
+                or "环境异常" in html
+            )
+            if verification_markers:
                 sub = rss_store.get_subscription(fakeid)
                 nickname = sub.get("nickname", "") if sub else ""
                 count = rss_store.increment_verification_count(fakeid, nickname)
-                logger.warning("Verification triggered for %s (count=%d): %s", 
+                logger.warning("Verification triggered for %s (count=%d): %s",
                              fakeid[:8], count, link[:60])
                 enriched.append(article)
                 continue

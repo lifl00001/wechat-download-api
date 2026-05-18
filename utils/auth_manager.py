@@ -29,25 +29,40 @@ class AuthManager:
     def __init__(self):
         if self._initialized:
             return
-        
+
         # 设置.env文件路径（python-api目录下）
         self.base_dir = Path(__file__).parent.parent
         self.env_path = self.base_dir / ".env"
-        
+
         # Docker环境下的凭证文件（存储在data目录，权限更可靠）
         self.credentials_file = self.base_dir / "data" / ".credentials.json"
-        
+
+        # [2026-05-15 OS-2 优化] 凭证缓存时间戳，30s 内不重复读文件
+        # 高频 RSS 请求场景下，原代码每次 get_credentials/get_token/get_cookie 都重读 .env
+        # 单次 HTTP 请求可能触发 2-3 次文件 IO，几百 RPS 下浪费明显
+        self._last_loaded_at: float = 0.0
+        self._load_ttl: float = 30.0  # 30 秒 TTL
+
         # 加载环境变量
-        self._load_credentials()
+        self._load_credentials(force=True)
         self._initialized = True
-    
-    def _load_credentials(self):
+
+    def _load_credentials(self, force: bool = False):
         """
         从多个来源加载凭证，优先级：
         1. data/.credentials.json (Docker环境推荐)
         2. .env 文件 (本地部署)
         3. 环境变量
+
+        [2026-05-15 OS-2] 加入 TTL 缓存：30s 内重复调用直接复用上次结果
+        save_credentials() 内部传 force=True 立即生效
         """
+        # TTL 缓存：30s 内不重复读
+        now = time.time()
+        if not force and (now - self._last_loaded_at) < self._load_ttl:
+            return
+        self._last_loaded_at = now
+
         # 先尝试从 JSON 凭证文件加载（Docker 环境）
         if self.credentials_file.exists():
             try:
@@ -57,11 +72,11 @@ class AuthManager:
                 return
             except Exception as e:
                 print(f"Warning: Failed to load credentials from {self.credentials_file}: {e}")
-        
+
         # 回退到 .env 文件（本地部署）
         if self.env_path.exists():
             load_dotenv(self.env_path, override=True)
-        
+
         self.credentials = {
             "token": os.getenv("WECHAT_TOKEN", ""),
             "cookie": os.getenv("WECHAT_COOKIE", ""),
@@ -95,6 +110,9 @@ class AuthManager:
             "nickname": nickname,
             "expire_time": expire_time
         })
+        # [2026-05-15 OS-2] 重置缓存时间戳，下次 _load_credentials 会立即重新读取文件
+        # 保证写入后内存与文件一致
+        self._last_loaded_at = time.time()
         
         success = False
         
