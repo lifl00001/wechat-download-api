@@ -72,3 +72,23 @@ saas/
 # 个人文档和脚本（不提交）
 docs/
 scripts/
+
+# 本地诊断 / 临时调试脚本（含生产凭证, 不提交）
+diagnose_*.py
+check_*.py
+verify_*.py
+inspect_*.py
+reset_*.py
+recheck_*.py
+reclassify_*.py
+fix_data_*.py
+.tmp_*.html
+
+# 历史 audit / changelog / 行动计划等私有 MD（不提交开源仓库）
+AUDIT_REPORT_*.md
+ACTION_PLAN_*.md
+ACCESS_SINCE_*.md
+CHANGELOG_*.md
+HISTORICAL_*.md
+OPENSOURCE_AUDIT_*.md
+VERIFY_*.md

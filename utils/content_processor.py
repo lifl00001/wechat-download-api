@@ -115,23 +115,37 @@ def extract_content(html: str) -> str:
         get_item_show_type, _extract_audio_share_content,
     )
 
+    # [2026-05-25] 3 个特殊分支返回空时 fallthrough 到下面通用 Pattern,
+    # 防御 WeChat HTML 模板变化 (新版 type-10 用 js_article 容器而非 JsDecode pattern)
     # Check for audio/video share pages (item_show_type=7) FIRST
     # These pages use Vue apps and have no js_content div
     if get_item_show_type(html) == '7':
         result = _extract_audio_share_content(html)
-        return result.get('content', '')
+        content = result.get('content', '')
+        if content:
+            return content
+        logger.info("type=7 audio_share returned empty, fallthrough to standard patterns")
 
     if is_image_text_message(html):
         result = _extract_image_text_content(html)
-        return result.get('content', '')
+        content = result.get('content', '')
+        if content:
+            return content
+        logger.info("type=8 image_text returned empty, fallthrough to standard patterns")
 
     if is_short_content_message(html):
         result = _extract_short_content(html)
-        return result.get('content', '')
+        content = result.get('content', '')
+        if content:
+            return content
+        logger.info("type=10 short_content returned empty, fallthrough to standard patterns")
 
     if is_audio_message(html):
         result = _extract_audio_content(html)
-        return result.get('content', '')
+        content = result.get('content', '')
+        if content:
+            return content
+        logger.info("audio extract returned empty, fallthrough to standard patterns")
 
     # Pattern 1: id="js_content" (most common)
     content = _extract_div_inner(html, r'<div[^>]*\bid=["\']js_content["\'][^>]*>')
@@ -155,6 +169,17 @@ def extract_content(html: str) -> str:
 
     # Pattern 5: id="js_article" (alternative article container)
     content = _extract_div_inner(html, r'<div[^>]*\bid=["\']js_article["\'][^>]*>')
+    if content:
+        return content
+
+    # [2026-05-25] Pattern 6: id="page_content" (underscore variant,
+    # was matched by has_article_content but missed by extract_content)
+    content = _extract_div_inner(html, r'<div[^>]*\bid=["\']page_content["\'][^>]*>')
+    if content:
+        return content
+
+    # [2026-05-25] Pattern 7: class="rich_media_area_primary" (no _inner suffix)
+    content = _extract_div_inner(html, r'<div[^>]*\bclass=["\'][^"\']*rich_media_area_primary[^"\']*["\'][^>]*>')
     if content:
         return content
 

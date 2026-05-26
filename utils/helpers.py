@@ -248,17 +248,52 @@ def _extract_short_content(html: str) -> Dict:
     Extract content from item_show_type=10 (short posts / reposts).
 
     Type-10 articles have no js_content div; text and metadata are inside
-    JsDecode() calls in <script> tags.
+    script tags. WeChat uses two storage formats:
+
+    Old format: content_noencode: JsDecode('...escaped...')
+    New format: content_noencode: '...escaped...'   (no JsDecode wrapper)
+
+    Both are supported. If neither yields content, fallback to og:title /
+    og:description meta (some accounts store the body there).
     """
     import html as html_module
 
-    # content / content_noencode (prefer content_noencode for unescaped text)
     text = ''
+    # [2026-05-25] WeChat 新版 type-10 把正文存为裸单引号字符串 (无 JsDecode 包装):
+    #     content_noencode: 'AI 产业大爆发...\x0a\x0a1、芯片设计...'
+    # 旧版用 JsDecode('...') 包装。两种格式都支持。
     for key in ('content_noencode', 'content'):
-        m = re.search(rf"{key}:\s*JsDecode\('([^']*)'\)", html)
-        if m and len(m.group(1)) > 10:
+        # 先 try JsDecode 包装 (旧版 type-10)
+        m = re.search(rf"\b{key}\s*:\s*JsDecode\('([^']*)'\)", html)
+        # fallback: 裸单引号字符串 (新版 type-10) - 取最长候选避免命中短占位
+        if not m or len(m.group(1)) <= 10:
+            candidates = re.findall(rf"\b{key}\s*:\s*'([^']*)'", html)
+            if candidates:
+                longest = max(candidates, key=len)
+                if len(longest) > 10:
+                    text = _jsdecode_unescape(longest)
+                    break
+        elif m and len(m.group(1)) > 10:
             text = _jsdecode_unescape(m.group(1))
             break
+
+    # og:title fallback (少数公众号把正文塞 og:title, 如部分 AI 周报)
+    if not text:
+        og_m = re.search(
+            r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']{30,})["\']',
+            html,
+        )
+        if og_m:
+            text = html_module.unescape(og_m.group(1)).replace('\\n', '\n').replace('\\x0a', '\n')
+
+    # og:description fallback
+    if not text:
+        og_d = re.search(
+            r'<meta\s+property=["\']og:description["\']\s+content=["\']([^"\']{30,})["\']',
+            html,
+        )
+        if og_d:
+            text = html_module.unescape(og_d.group(1)).replace('\\n', '\n').replace('\\x0a', '\n')
 
     # Cover / head image
     images = []
@@ -267,6 +302,14 @@ def _extract_short_content(html: str) -> Dict:
         img_url = _jsdecode_unescape(img_m.group(1))
         if 'mmbiz.qpic.cn' in img_url or 'wx.qlogo.cn' in img_url:
             images.append(img_url)
+    if not images:
+        og_i = re.search(
+            r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html,
+        )
+        if og_i:
+            url = og_i.group(1)
+            if 'mmbiz.qpic.cn' in url or 'wx.qlogo.cn' in url:
+                images.append(url)
 
     # Build HTML: simple paragraphs
     html_parts = []
@@ -738,7 +781,7 @@ def get_unavailable_reason(html: str) -> Optional[str]:
         import re
         title_match = re.search(r'<title>(.*?)</title>', html, re.IGNORECASE)
         if title_match and "该内容暂时无法查看" in title_match.group(1):
-            return "暂时无法查看"
+            return "该内容暂时无法查看"
     
     # 特殊处理：空Vue应用（隐私设置的动态错误页面）
     # 特征：<div id="app"></div> 是空的 + 无文章内容容器 + HTML不超大（<200KB）
@@ -758,6 +801,32 @@ def get_unavailable_reason(html: str) -> Optional[str]:
             return "根据作者隐私设置不可查看"
     
     return None
+
+
+def get_exhausted_reason(html: str) -> Optional[str]:
+    """
+    [2026-05-26] retry 用尽后的精确失败原因 — 比 get_unavailable_reason 更宽松。
+
+    开源版当前 rss_poller 是单次拉取无 retry, 暂未直接使用本函数;
+    但提供给二次开发者扩展 retry 流程时使用, 保持与 SaaS 端 API 对齐。
+
+    用法: poller 决定标 "retries exhausted" 之前先调本函数, 拿到精确原因
+    可避免大量模糊的 retries exhausted 标签堆积。
+    """
+    if not html:
+        return None
+
+    reason = get_unavailable_reason(html)
+    if reason:
+        return reason
+
+    # 拉到 HTML 但既无明确错误页特征也无正文容器
+    if not has_article_content(html):
+        if len(html) < 1000:
+            return "拉取响应异常"
+        return "内容无法解析"
+
+    return "内容无法解析"
 
 
 def is_need_verification(html: str) -> bool:
