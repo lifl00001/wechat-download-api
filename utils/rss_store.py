@@ -5,39 +5,24 @@
 # See LICENSE file in the project root for full license text.
 # SPDX-License-Identifier: AGPL-3.0-only
 """
-RSS 数据存储 — SQLite
+RSS 数据存储 — SQLite / MySQL
 管理订阅列表和文章缓存
 """
 
-import sqlite3
 import time
 import logging
-import os
-from pathlib import Path
 from typing import List, Dict, Optional
+from utils import db_manager
 
 logger = logging.getLogger(__name__)
-
-# Database path: configurable via env var, defaults to ./data/rss.db
-_default_db = Path(__file__).parent.parent / "data" / "rss.db"
-DB_PATH = Path(os.getenv("RSS_DB_PATH", str(_default_db)))
-
-
-def _get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
 
 
 def init_db():
     """建表（幂等）"""
-    conn = _get_conn()
-    
+    conn = db_manager.get_conn()
+
     # 先创建不依赖其他表的基础表
-    conn.executescript("""
+    db_manager.adapt_executescript(conn, """
         -- 分类表（先创建，因为 subscriptions 依赖它）
         CREATE TABLE IF NOT EXISTS categories (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,7 +32,7 @@ def init_db():
             sort_order  INTEGER NOT NULL DEFAULT 0,
             created_at  INTEGER NOT NULL
         );
-        
+
         -- 黑名单表
         CREATE TABLE IF NOT EXISTS fakeid_blacklist (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,29 +45,25 @@ def init_db():
             unblacklisted_at INTEGER DEFAULT NULL,
             note        TEXT NOT NULL DEFAULT ''
         );
-        
+
         CREATE INDEX IF NOT EXISTS idx_blacklist_active ON fakeid_blacklist(is_active);
     """)
-    conn.commit()
-    
+    db_manager.commit(conn)
+
     # 检查 subscriptions 表是否存在
-    cursor = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='subscriptions'"
-    )
-    table_exists = cursor.fetchone() is not None
-    
+    table_exists = db_manager.check_table_exists(conn, "subscriptions")
+
     if table_exists:
         # 表已存在，检查是否有 category_id 列
-        cursor = conn.execute("PRAGMA table_info(subscriptions)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "category_id" not in columns:
+        if not db_manager.check_column_exists(conn, "subscriptions", "category_id"):
             # 添加 category_id 列
-            conn.execute("ALTER TABLE subscriptions ADD COLUMN category_id INTEGER DEFAULT NULL")
-            conn.commit()
+            cursor = db_manager.execute(conn, "ALTER TABLE subscriptions ADD COLUMN category_id INTEGER DEFAULT NULL")
+            cursor.close()
+            db_manager.commit(conn)
             logger.info("Added category_id column to subscriptions table")
     else:
         # 表不存在，创建新表
-        conn.executescript("""
+        db_manager.adapt_executescript(conn, """
             CREATE TABLE subscriptions (
                 fakeid      TEXT PRIMARY KEY,
                 nickname    TEXT NOT NULL DEFAULT '',
@@ -94,10 +75,10 @@ def init_db():
                 FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
             );
         """)
-        conn.commit()
-    
+        db_manager.commit(conn)
+
     # 创建 articles 表
-    conn.executescript("""
+    db_manager.adapt_executescript(conn, """
         CREATE TABLE IF NOT EXISTS articles (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             fakeid      TEXT NOT NULL,
@@ -119,85 +100,86 @@ def init_db():
             ON articles(fakeid, publish_time DESC);
         CREATE INDEX IF NOT EXISTS idx_subscriptions_category ON subscriptions(category_id);
     """)
-    conn.commit()
-    
+    db_manager.commit(conn)
+
     # 检查并添加 source 字段（用于区分轮询器文章和历史文章）
-    cursor = conn.execute("PRAGMA table_info(articles)")
-    columns = [row[1] for row in cursor.fetchall()]
-    if "source" not in columns:
+    if not db_manager.check_column_exists(conn, "articles", "source"):
         logger.info("Adding source column to articles table")
-        conn.execute("ALTER TABLE articles ADD COLUMN source TEXT NOT NULL DEFAULT 'poll'")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)")
-        conn.commit()
+        cursor = db_manager.execute(conn, "ALTER TABLE articles ADD COLUMN source TEXT NOT NULL DEFAULT 'poll'")
+        cursor.close()
+        db_manager.execute(conn, "CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)")
+        db_manager.commit(conn)
         logger.info("Added source column and index to articles table")
-    
-    conn.close()
-    logger.info("RSS database initialized: %s", DB_PATH)
+
+    db_manager.close_conn(conn)
+    logger.info("RSS database initialized")
 
 
 # ── 订阅管理 ─────────────────────────────────────────────
 
 def add_subscription(fakeid: str, nickname: str = "",
                      alias: str = "", head_img: str = "") -> bool:
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute(
+        cursor = db_manager.execute(
+            conn,
             "INSERT OR IGNORE INTO subscriptions "
             "(fakeid, nickname, alias, head_img, created_at) VALUES (?,?,?,?,?)",
             (fakeid, nickname, alias, head_img, int(time.time())),
         )
-        conn.commit()
-        return conn.total_changes > 0
+        db_manager.commit(conn)
+        return cursor.rowcount > 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def remove_subscription(fakeid: str) -> bool:
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute("DELETE FROM subscriptions WHERE fakeid=?", (fakeid,))
-        conn.commit()
-        return conn.total_changes > 0
+        cursor = db_manager.execute(conn, "DELETE FROM subscriptions WHERE fakeid=?", (fakeid,))
+        db_manager.commit(conn)
+        return cursor.rowcount > 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def list_subscriptions() -> List[Dict]:
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute(
+        return db_manager.fetchall(
+            conn,
             "SELECT s.*, c.name AS category_name, "
             "(SELECT COUNT(*) FROM articles a WHERE a.fakeid=s.fakeid) AS article_count "
             "FROM subscriptions s "
             "LEFT JOIN categories c ON s.category_id = c.id "
-            "ORDER BY s.created_at DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
+            "ORDER BY s.created_at DESC",
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_subscription(fakeid: str) -> Optional[Dict]:
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        row = conn.execute(
-            "SELECT * FROM subscriptions WHERE fakeid=?", (fakeid,)
-        ).fetchone()
-        return dict(row) if row else None
+        return db_manager.fetchone(
+            conn,
+            "SELECT * FROM subscriptions WHERE fakeid=?", (fakeid,),
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def update_last_poll(fakeid: str):
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute(
+        db_manager.execute(
+            conn,
             "UPDATE subscriptions SET last_poll=? WHERE fakeid=?",
             (int(time.time()), fakeid),
         )
-        conn.commit()
+        db_manager.commit(conn)
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 # ── 文章缓存 ─────────────────────────────────────────────
@@ -206,67 +188,98 @@ def save_articles(fakeid: str, articles: List[Dict], source: str = "poll") -> in
     """
     批量保存文章，返回新增数量。
     If an article already exists but has empty content, update it with new content.
-    
+
     Args:
         fakeid: 公众号ID
         articles: 文章列表
         source: 文章来源标记，'poll'为轮询器拉取，'deep_fetch'为历史文章获取
     """
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     inserted = 0
     try:
         for a in articles:
             content = a.get("content", "")
             plain_content = a.get("plain_content", "")
             try:
-                cursor = conn.execute(
-                    "INSERT INTO articles "
-                    "(fakeid, aid, title, link, digest, cover, author, "
-                    "content, plain_content, publish_time, fetched_at, source) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
-                    "ON CONFLICT(fakeid, link) DO UPDATE SET "
-                    "content = CASE WHEN excluded.content != '' AND articles.content = '' "
-                    "  THEN excluded.content ELSE articles.content END, "
-                    "plain_content = CASE WHEN excluded.plain_content != '' AND articles.plain_content = '' "
-                    "  THEN excluded.plain_content ELSE articles.plain_content END, "
-                    "author = CASE WHEN excluded.author != '' AND articles.author = '' "
-                    "  THEN excluded.author ELSE articles.author END",
-                    (
-                        fakeid,
-                        a.get("aid", ""),
-                        a.get("title", ""),
-                        a.get("link", ""),
-                        a.get("digest", ""),
-                        a.get("cover", ""),
-                        a.get("author", ""),
-                        content,
-                        plain_content,
-                        a.get("publish_time", 0),
-                        int(time.time()),
-                        source,
-                    ),
-                )
+                if db_manager.USE_MYSQL:
+                    cursor = db_manager.execute(
+                        conn,
+                        "INSERT INTO articles "
+                        "(fakeid, aid, title, link, digest, cover, author, "
+                        "content, plain_content, publish_time, fetched_at, source) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                        "ON DUPLICATE KEY UPDATE "
+                        "content = CASE WHEN VALUES(content) != '' AND articles.content = '' "
+                        "  THEN VALUES(content) ELSE articles.content END, "
+                        "plain_content = CASE WHEN VALUES(plain_content) != '' AND articles.plain_content = '' "
+                        "  THEN VALUES(plain_content) ELSE articles.plain_content END, "
+                        "author = CASE WHEN VALUES(author) != '' AND articles.author = '' "
+                        "  THEN VALUES(author) ELSE articles.author END",
+                        (
+                            fakeid,
+                            a.get("aid", ""),
+                            a.get("title", ""),
+                            a.get("link", ""),
+                            a.get("digest", ""),
+                            a.get("cover", ""),
+                            a.get("author", ""),
+                            content,
+                            plain_content,
+                            a.get("publish_time", 0),
+                            int(time.time()),
+                            source,
+                        ),
+                    )
+                else:
+                    cursor = db_manager.execute(
+                        conn,
+                        "INSERT INTO articles "
+                        "(fakeid, aid, title, link, digest, cover, author, "
+                        "content, plain_content, publish_time, fetched_at, source) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(fakeid, link) DO UPDATE SET "
+                        "content = CASE WHEN excluded.content != '' AND articles.content = '' "
+                        "  THEN excluded.content ELSE articles.content END, "
+                        "plain_content = CASE WHEN excluded.plain_content != '' AND articles.plain_content = '' "
+                        "  THEN excluded.plain_content ELSE articles.plain_content END, "
+                        "author = CASE WHEN excluded.author != '' AND articles.author = '' "
+                        "  THEN excluded.author ELSE articles.author END",
+                        (
+                            fakeid,
+                            a.get("aid", ""),
+                            a.get("title", ""),
+                            a.get("link", ""),
+                            a.get("digest", ""),
+                            a.get("cover", ""),
+                            a.get("author", ""),
+                            content,
+                            plain_content,
+                            a.get("publish_time", 0),
+                            int(time.time()),
+                            source,
+                        ),
+                    )
                 if cursor.rowcount > 0:
                     inserted += 1
-            except sqlite3.IntegrityError:
+            except db_manager.IntegrityError:
                 pass
-        conn.commit()
+        db_manager.commit(conn)
         return inserted
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_articles(fakeid: str, limit: int = 20) -> List[Dict]:
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute(
+        return db_manager.fetchall(
+            conn,
             "SELECT * FROM articles WHERE fakeid=? "
             "ORDER BY publish_time DESC LIMIT ?",
             (fakeid, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_regular_articles(fakeid: str, limit: int = 50) -> List[Dict]:
@@ -274,16 +287,16 @@ def get_regular_articles(fakeid: str, limit: int = 50) -> List[Dict]:
     获取常规文章（轮询器拉取的文章）
     只返回 source='poll' 的文章，不包含历史文章
     """
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute(
+        return db_manager.fetchall(
+            conn,
             "SELECT * FROM articles WHERE fakeid=? AND source='poll' "
             "ORDER BY publish_time DESC LIMIT ?",
             (fakeid, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_historical_articles(fakeid: str, limit: int = 500, offset: int = 0) -> List[Dict]:
@@ -291,76 +304,78 @@ def get_historical_articles(fakeid: str, limit: int = 500, offset: int = 0) -> L
     获取历史文章（通过"获取历史文章"功能拉取的文章）
     返回 source='deep_fetch' 的文章，用于独立的历史 RSS，支持分页
     """
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute(
+        return db_manager.fetchall(
+            conn,
             "SELECT * FROM articles WHERE fakeid=? AND source='deep_fetch' "
             "ORDER BY publish_time DESC LIMIT ? OFFSET ?",
             (fakeid, limit, offset),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def count_historical_articles(fakeid: str) -> int:
     """统计历史文章数量（source='deep_fetch'的文章）"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        row = conn.execute(
+        row = db_manager.fetchone(
+            conn,
             "SELECT COUNT(*) as cnt FROM articles WHERE fakeid=? AND source='deep_fetch'",
             (fakeid,),
-        ).fetchone()
+        )
         return row["cnt"] if row else 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_all_fakeids() -> List[str]:
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute("SELECT fakeid FROM subscriptions").fetchall()
+        rows = db_manager.fetchall(conn, "SELECT fakeid FROM subscriptions")
         return [r["fakeid"] for r in rows]
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_all_articles(limit: int = 50) -> List[Dict]:
     """
     获取所有订阅的常规文章（聚合RSS）
     只返回轮询器拉取的文章（source='poll'），不包含历史文章
-    
+
     [2026-05-06 优化] 使用窗口函数实现"每号限额 + 总数限制"策略：
     - 根据订阅数量动态调整每个号的文章数限制
     - 保证每个订阅号都有文章显示（避免活跃号占满）
     - 单订阅场景与单个 RSS 保持一致
     """
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
         # 获取所有订阅的fakeid
-        subs = conn.execute("SELECT fakeid FROM subscriptions").fetchall()
+        subs = db_manager.fetchall(conn, "SELECT fakeid FROM subscriptions")
         if not subs:
             return []
-        
+
         fakeid_list = [s["fakeid"] for s in subs]
         subscription_count = len(fakeid_list)
-        
+
         # 根据订阅数量计算动态限制
         per_sub_limit, total_limit = _calculate_aggregated_limits(subscription_count)
-        
+
         # 使用实际的 limit 参数作为总数上限（用户可自定义）
         total_limit = min(limit, total_limit)
-        
+
         placeholders = ",".join("?" * len(fakeid_list))
-        
+
         # 使用窗口函数：每个订阅号最多 N 篇，总共最多 M 篇
-        rows = conn.execute(
+        rows = db_manager.fetchall(
+            conn,
             f"""
             WITH ranked_articles AS (
-                SELECT 
+                SELECT
                     *,
                     ROW_NUMBER() OVER (
-                        PARTITION BY fakeid 
+                        PARTITION BY fakeid
                         ORDER BY publish_time DESC
                     ) AS rn
                 FROM articles
@@ -372,23 +387,23 @@ def get_all_articles(limit: int = 50) -> List[Dict]:
             LIMIT ?
             """,
             (*fakeid_list, per_sub_limit, total_limit),
-        ).fetchall()
-        
-        return [dict(r) for r in rows]
+        )
+
+        return rows
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def _calculate_aggregated_limits(subscription_count: int) -> tuple:
     """
     根据订阅数量动态计算聚合 RSS 的限制策略
-    
+
     Args:
         subscription_count: 订阅数量
-    
+
     Returns:
         (per_sub_limit, total_limit): 每个订阅号的限额、总数上限
-    
+
     策略设计：
     - 每个订阅号统一 30 篇
     - total_limit = subscription_count * 30（精确计算）
@@ -396,14 +411,14 @@ def _calculate_aggregated_limits(subscription_count: int) -> tuple:
     """
     if subscription_count == 0:
         return (0, 0)
-    
+
     per_sub_limit = 30
     total_limit = subscription_count * 30
-    
+
     # 上限：4500 篇（对应 150 个订阅）
     if total_limit > 4500:
         total_limit = 4500
-    
+
     return (per_sub_limit, total_limit)
 
 
@@ -412,81 +427,85 @@ def _calculate_aggregated_limits(subscription_count: int) -> tuple:
 def add_to_blacklist(fakeid: str, nickname: str = "", reason: str = "manual",
                      verification_count: int = 0, note: str = "") -> bool:
     """添加公众号到黑名单"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute(
+        db_manager.execute(
+            conn,
             "INSERT OR REPLACE INTO fakeid_blacklist "
             "(fakeid, nickname, reason, verification_count, is_active, blacklisted_at, note) "
             "VALUES (?,?,?,?,1,?,?)",
             (fakeid, nickname, reason, verification_count, int(time.time()), note),
         )
-        conn.commit()
+        db_manager.commit(conn)
         logger.info("Added %s to blacklist: %s", fakeid[:8], reason)
         return True
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def remove_from_blacklist(fakeid: str) -> bool:
     """从黑名单移除（标记为非活跃）"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute(
+        cursor = db_manager.execute(
+            conn,
             "UPDATE fakeid_blacklist SET is_active=0, unblacklisted_at=? WHERE fakeid=?",
             (int(time.time()), fakeid),
         )
-        conn.commit()
-        return conn.total_changes > 0
+        db_manager.commit(conn)
+        return cursor.rowcount > 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def delete_blacklist_record(blacklist_id: int) -> bool:
     """永久删除黑名单记录"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute("DELETE FROM fakeid_blacklist WHERE id=? AND is_active=0", (blacklist_id,))
-        conn.commit()
-        return conn.total_changes > 0
+        cursor = db_manager.execute(conn, "DELETE FROM fakeid_blacklist WHERE id=? AND is_active=0", (blacklist_id,))
+        db_manager.commit(conn)
+        return cursor.rowcount > 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def is_blacklisted(fakeid: str) -> bool:
     """检查公众号是否在黑名单中"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        row = conn.execute(
+        row = db_manager.fetchone(
+            conn,
             "SELECT 1 FROM fakeid_blacklist WHERE fakeid=? AND is_active=1",
             (fakeid,),
-        ).fetchone()
+        )
         return row is not None
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_blacklist() -> List[Dict]:
     """获取黑名单列表"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute(
-            "SELECT * FROM fakeid_blacklist ORDER BY blacklisted_at DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return db_manager.fetchall(
+            conn,
+            "SELECT * FROM fakeid_blacklist ORDER BY blacklisted_at DESC",
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_active_blacklist_fakeids() -> List[str]:
     """获取活跃黑名单的 fakeid 列表"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute(
-            "SELECT fakeid FROM fakeid_blacklist WHERE is_active=1"
-        ).fetchall()
+        rows = db_manager.fetchall(
+            conn,
+            "SELECT fakeid FROM fakeid_blacklist WHERE is_active=1",
+        )
         return [r["fakeid"] for r in rows]
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def increment_verification_count(fakeid: str, nickname: str = "") -> int:
@@ -504,11 +523,12 @@ def increment_verification_count(fakeid: str, nickname: str = "") -> int:
     返回：当前触发次数
     """
     threshold = 8
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        row = conn.execute(
-            "SELECT * FROM fakeid_blacklist WHERE fakeid=?", (fakeid,)
-        ).fetchone()
+        row = db_manager.fetchone(
+            conn,
+            "SELECT * FROM fakeid_blacklist WHERE fakeid=?", (fakeid,),
+        )
 
         if row:
             new_count = row["verification_count"] + 1
@@ -518,7 +538,8 @@ def increment_verification_count(fakeid: str, nickname: str = "") -> int:
             )
             if crossing_threshold:
                 # 首次跨过阈值：激活拉黑
-                conn.execute(
+                db_manager.execute(
+                    conn,
                     "UPDATE fakeid_blacklist SET verification_count=?, is_active=1, "
                     "blacklisted_at=?, note=? WHERE fakeid=?",
                     (new_count, int(time.time()),
@@ -527,13 +548,15 @@ def increment_verification_count(fakeid: str, nickname: str = "") -> int:
                 )
             else:
                 # 仅累计计数，不动 is_active（保留 admin 手动取消的状态）
-                conn.execute(
+                db_manager.execute(
+                    conn,
                     "UPDATE fakeid_blacklist SET verification_count=? WHERE fakeid=?",
                     (new_count, fakeid),
                 )
         else:
             new_count = 1
-            conn.execute(
+            db_manager.execute(
+                conn,
                 "INSERT INTO fakeid_blacklist "
                 "(fakeid, nickname, reason, verification_count, is_active, blacklisted_at, note) "
                 "VALUES (?,?,?,?,?,?,?)",
@@ -543,7 +566,7 @@ def increment_verification_count(fakeid: str, nickname: str = "") -> int:
                  f"自动记录: 触发验证码 {new_count} 次"),
             )
 
-        conn.commit()
+        db_manager.commit(conn)
 
         if new_count >= threshold:
             logger.warning("Fakeid %s reached %d verification triggers (threshold=%d)",
@@ -551,36 +574,37 @@ def increment_verification_count(fakeid: str, nickname: str = "") -> int:
 
         return new_count
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 # ── 分类管理 ─────────────────────────────────────────────
 
 def create_category(name: str, description: str = "", color: str = "blue") -> Optional[int]:
     """创建分类，返回新分类 ID"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
         # 获取最大 sort_order
-        row = conn.execute("SELECT MAX(sort_order) as max_order FROM categories").fetchone()
+        row = db_manager.fetchone(conn, "SELECT MAX(sort_order) as max_order FROM categories")
         max_order = row["max_order"] or 0
-        
-        cursor = conn.execute(
+
+        cursor = db_manager.execute(
+            conn,
             "INSERT INTO categories (name, description, color, sort_order, created_at) "
             "VALUES (?,?,?,?,?)",
             (name, description, color, max_order + 1, int(time.time())),
         )
-        conn.commit()
-        return cursor.lastrowid
-    except sqlite3.IntegrityError:
+        db_manager.commit(conn)
+        return db_manager.lastrowid(cursor)
+    except db_manager.IntegrityError:
         return None
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
-def update_category(category_id: int, name: str = None, 
+def update_category(category_id: int, name: str = None,
                     description: str = None, color: str = None) -> bool:
     """更新分类"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
         updates = []
         params = []
@@ -593,124 +617,127 @@ def update_category(category_id: int, name: str = None,
         if color is not None:
             updates.append("color=?")
             params.append(color)
-        
+
         if not updates:
             return False
-        
+
         params.append(category_id)
-        conn.execute(
+        cursor = db_manager.execute(
+            conn,
             f"UPDATE categories SET {', '.join(updates)} WHERE id=?",
             params,
         )
-        conn.commit()
-        return conn.total_changes > 0
+        db_manager.commit(conn)
+        return cursor.rowcount > 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def delete_category(category_id: int) -> bool:
     """删除分类（订阅会自动解除关联）"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute("DELETE FROM categories WHERE id=?", (category_id,))
-        conn.commit()
-        return conn.total_changes > 0
+        cursor = db_manager.execute(conn, "DELETE FROM categories WHERE id=?", (category_id,))
+        db_manager.commit(conn)
+        return cursor.rowcount > 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def list_categories() -> List[Dict]:
     """获取所有分类及其订阅数"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute("""
-            SELECT c.*, 
+        return db_manager.fetchall(conn, """
+            SELECT c.*,
                    (SELECT COUNT(*) FROM subscriptions s WHERE s.category_id=c.id) AS subscription_count
-            FROM categories c 
+            FROM categories c
             ORDER BY c.sort_order, c.created_at
-        """).fetchall()
-        return [dict(r) for r in rows]
+        """)
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_category(category_id: int) -> Optional[Dict]:
     """获取单个分类"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        row = conn.execute(
-            "SELECT * FROM categories WHERE id=?", (category_id,)
-        ).fetchone()
-        return dict(row) if row else None
+        return db_manager.fetchone(
+            conn,
+            "SELECT * FROM categories WHERE id=?", (category_id,),
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def set_subscription_category(fakeid: str, category_id: Optional[int]) -> bool:
     """设置订阅的分类"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        conn.execute(
+        cursor = db_manager.execute(
+            conn,
             "UPDATE subscriptions SET category_id=? WHERE fakeid=?",
             (category_id, fakeid),
         )
-        conn.commit()
-        return conn.total_changes > 0
+        db_manager.commit(conn)
+        return cursor.rowcount > 0
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_subscriptions_by_category(category_id: int) -> List[Dict]:
     """获取分类下的所有订阅"""
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
-        rows = conn.execute(
+        return db_manager.fetchall(
+            conn,
             "SELECT s.*, "
             "(SELECT COUNT(*) FROM articles a WHERE a.fakeid=s.fakeid) AS article_count "
             "FROM subscriptions s WHERE s.category_id=? ORDER BY s.created_at DESC",
             (category_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
 def get_articles_by_category(category_id: int, limit: int = 50) -> List[Dict]:
     """
     获取分类下所有订阅的常规文章
     只返回轮询器拉取的文章（source='poll'），不包含历史文章
-    
+
     [2026-05-06 优化] 使用窗口函数实现"每号限额 + 总数限制"策略
     """
-    conn = _get_conn()
+    conn = db_manager.get_conn()
     try:
         # 获取该分类下的所有fakeid
-        subs = conn.execute(
+        subs = db_manager.fetchall(
+            conn,
             "SELECT fakeid FROM subscriptions WHERE category_id=?",
-            (category_id,)
-        ).fetchall()
+            (category_id,),
+        )
         if not subs:
             return []
-        
+
         fakeid_list = [s["fakeid"] for s in subs]
         subscription_count = len(fakeid_list)
-        
+
         # [2026-05-06 优化] 使用窗口函数实现"每号限额 + 总数限制"策略
         # 根据订阅数量计算动态限制
         per_sub_limit, total_limit = _calculate_aggregated_limits(subscription_count)
         # 使用实际的 limit 参数作为总数上限（用户可自定义）
         total_limit = min(limit, total_limit)
-        
+
         placeholders = ",".join("?" * len(fakeid_list))
-        
+
         # 使用窗口函数：每个订阅号最多 N 篇，总共最多 M 篇
-        rows = conn.execute(
+        return db_manager.fetchall(
+            conn,
             f"""
             WITH ranked_articles AS (
-                SELECT 
+                SELECT
                     *,
                     ROW_NUMBER() OVER (
-                        PARTITION BY fakeid 
+                        PARTITION BY fakeid
                         ORDER BY publish_time DESC
                     ) AS rn
                 FROM articles
@@ -722,9 +749,65 @@ def get_articles_by_category(category_id: int, limit: int = 50) -> List[Dict]:
             LIMIT ?
             """,
             (*fakeid_list, per_sub_limit, total_limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
     finally:
-        conn.close()
+        db_manager.close_conn(conn)
 
 
+# ── 文章库查询 ─────────────────────────────────────────────
+
+def list_cached_articles(limit: int = 20, offset: int = 0,
+                         fakeid: str = None, source: str = None,
+                         keyword: str = None) -> list:
+    conn = db_manager.get_conn()
+    try:
+        conditions = []
+        params = []
+        if fakeid:
+            conditions.append("a.fakeid = ?")
+            params.append(fakeid)
+        if source:
+            conditions.append("a.source = ?")
+            params.append(source)
+        if keyword:
+            kw = f"%{keyword}%"
+            conditions.append("(a.title LIKE ? OR a.digest LIKE ? OR a.author LIKE ? OR a.plain_content LIKE ?)")
+            params.extend([kw, kw, kw, kw])
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        return db_manager.fetchall(
+            conn,
+            f"SELECT a.*, s.nickname FROM articles a LEFT JOIN subscriptions s ON a.fakeid = s.fakeid{where} ORDER BY a.publish_time DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        )
+    finally:
+        db_manager.close_conn(conn)
+
+
+def count_cached_articles(fakeid: str = None, source: str = None, keyword: str = None) -> int:
+    conn = db_manager.get_conn()
+    try:
+        conditions = []
+        params = []
+        if fakeid:
+            conditions.append("fakeid = ?")
+            params.append(fakeid)
+        if source:
+            conditions.append("source = ?")
+            params.append(source)
+        if keyword:
+            kw = f"%{keyword}%"
+            conditions.append("(title LIKE ? OR digest LIKE ? OR author LIKE ? OR plain_content LIKE ?)")
+            params.extend([kw, kw, kw, kw])
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        row = db_manager.fetchone(conn, f"SELECT COUNT(*) as cnt FROM articles{where}", tuple(params))
+        return row["cnt"] if row else 0
+    finally:
+        db_manager.close_conn(conn)
+
+
+def get_cached_article(article_id: int) -> Optional[Dict]:
+    conn = db_manager.get_conn()
+    try:
+        return db_manager.fetchone(conn, "SELECT * FROM articles WHERE id = ?", (article_id,))
+    finally:
+        db_manager.close_conn(conn)
