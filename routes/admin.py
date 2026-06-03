@@ -10,11 +10,12 @@
 
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from utils.auth_manager import auth_manager
 from utils import rss_store
+from utils.settings_manager import settings_manager
 
 router = APIRouter()
 
@@ -243,6 +244,65 @@ async def set_subscription_category(fakeid: str, req: SetCategoryRequest):
     if success:
         return {"success": True, "message": "分类已设置"}
     raise HTTPException(status_code=404, detail="订阅不存在")
+
+
+# ── 系统配置 ─────────────────────────────────────────────
+
+@router.get("/settings", summary="获取所有配置项")
+async def get_settings():
+    """获取所有系统配置"""
+    items = settings_manager.list_all()
+    return {"success": True, "data": items}
+
+
+class SettingsUpdateRequest(BaseModel):
+    settings: dict = Field(..., description="配置项键值对")
+
+
+@router.put("/settings", summary="批量更新配置项")
+async def update_settings(req: SettingsUpdateRequest):
+    """批量更新系统配置"""
+    settings_manager.set_many(req.settings)
+    return {"success": True, "message": "配置已更新"}
+
+
+# ── 文章库 ─────────────────────────────────────────────
+
+@router.get("/articles", summary="获取文章库列表")
+async def list_articles(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    fakeid: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+):
+    """分页查询文章库"""
+    offset = (page - 1) * page_size
+    articles = rss_store.list_cached_articles(
+        limit=page_size, offset=offset,
+        fakeid=fakeid, source=source, keyword=keyword,
+    )
+    total = rss_store.count_cached_articles(
+        fakeid=fakeid, source=source, keyword=keyword,
+    )
+    return {
+        "success": True,
+        "data": {
+            "articles": articles,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        },
+    }
+
+
+@router.get("/articles/{article_id}", summary="获取文章详情")
+async def get_article_detail(article_id: int):
+    """获取单篇文章完整内容"""
+    article = rss_store.get_cached_article(article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    return {"success": True, "data": article}
 
 
 # ── 历史文章获取 ─────────────────────────────────────────────
