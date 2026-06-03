@@ -166,6 +166,11 @@ async def history_page():
     """历史文章获取页面"""
     return FileResponse(static_dir / "history.html")
 
+@app.get("/articles.html", include_in_schema=False)
+async def articles_page():
+    """文章库页面"""
+    return FileResponse(static_dir / "articles.html")
+
 if __name__ == "__main__":
     import os
     import uvicorn
