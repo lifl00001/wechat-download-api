@@ -471,6 +471,123 @@
             color: var(--text-secondary);
             line-height: 1.8;
         }
+
+        /* Settings Panel */
+        .settings-panel {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-large);
+            box-shadow: var(--shadow-light);
+            padding: var(--space-lg);
+            margin-bottom: var(--space-lg);
+        }
+
+        .settings-panel-title {
+            font-size: var(--font-lg);
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: var(--space-lg);
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+        }
+
+        .settings-group {
+            margin-bottom: var(--space-lg);
+        }
+
+        .settings-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .settings-group-title {
+            font-size: var(--font-sm);
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: var(--space-md);
+            padding-bottom: var(--space-sm);
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .settings-row {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            margin-bottom: var(--space-sm);
+        }
+
+        .settings-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .settings-label {
+            min-width: 160px;
+            font-size: var(--font-sm);
+            color: var(--text-primary);
+            flex-shrink: 0;
+        }
+
+        .settings-field {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .settings-field input,
+        .settings-field select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-base);
+            font-size: var(--font-sm);
+            color: var(--text-primary);
+            background: var(--bg-primary);
+            outline: none;
+            transition: border-color var(--duration-fast) var(--ease-in-out);
+        }
+
+        .settings-field input:focus,
+        .settings-field select:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+        }
+
+        .settings-field textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-base);
+            font-size: var(--font-sm);
+            color: var(--text-primary);
+            background: var(--bg-primary);
+            outline: none;
+            resize: vertical;
+            min-height: 80px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            transition: border-color var(--duration-fast) var(--ease-in-out);
+        }
+
+        .settings-field textarea:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+        }
+
+        .settings-actions {
+            margin-top: var(--space-lg);
+            display: flex;
+            justify-content: flex-end;
+            gap: var(--space-sm);
+        }
+
+        @media (max-width: 768px) {
+            .settings-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .settings-label {
+                min-width: auto;
+                margin-bottom: var(--space-xs);
+            }
+        }
     </style>
 </head>
 <body>
@@ -524,6 +641,7 @@
                     <li><a href="/login.html"><span>扫码登录</span><span class="arrow">&#8250;</span></a></li>
                     <li><a href="/verify.html"><span>验证处理</span><span class="arrow">&#8250;</span></a></li>
                     <li><a href="/rss.html"><span>RSS 订阅</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/articles.html"><span>📚 文章库</span><span class="arrow">&#8250;</span></a></li>
                 </ul>
             </div>
 
@@ -618,6 +736,190 @@
                     <div class="result-meta" id="resultMeta" style="display:none;"></div>
                     <div class="result-body" id="resultBody"></div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Settings Panel -->
+        <div class="settings-panel">
+            <div class="settings-panel-title">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--primary-color)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+                </svg>
+                系统设置
+            </div>
+
+            <!-- Group: 基础配置 -->
+            <div class="settings-group">
+                <div class="settings-group-title">基础配置</div>
+                <div class="settings-row">
+                    <div class="settings-label">网站URL</div>
+                    <div class="settings-field">
+                        <input type="text" id="setting_site_url" placeholder="https://example.com">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Group: 限频配置 -->
+            <div class="settings-group">
+                <div class="settings-group-title">限频配置</div>
+                <div class="settings-row">
+                    <div class="settings-label">全局限频(次/分)</div>
+                    <div class="settings-field">
+                        <input type="number" id="setting_rate_limit_global" placeholder="60">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-label">单IP限频(次/分)</div>
+                    <div class="settings-field">
+                        <input type="number" id="setting_rate_limit_per_ip" placeholder="30">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-label">文章间隔(秒)</div>
+                    <div class="settings-field">
+                        <input type="number" id="setting_rate_limit_article_interval" placeholder="2">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Group: RSS 配置 -->
+            <div class="settings-group">
+                <div class="settings-group-title">RSS 配置</div>
+                <div class="settings-row">
+                    <div class="settings-label">轮询间隔(秒)</div>
+                    <div class="settings-field">
+                        <input type="number" id="setting_rss_poll_interval" placeholder="300">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-label">每次拉取数</div>
+                    <div class="settings-field">
+                        <input type="number" id="setting_articles_per_poll" placeholder="5">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-label">获取完整内容</div>
+                    <div class="settings-field">
+                        <select id="setting_rss_fetch_full_content">
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Group: 代理配置 -->
+            <div class="settings-group">
+                <div class="settings-group-title">代理配置</div>
+                <div class="settings-row">
+                    <div class="settings-label">代理模式</div>
+                    <div class="settings-field">
+                        <select id="setting_proxy_mode" onchange="toggleProxyMode()">
+                            <option value="static">static</option>
+                            <option value="dynamic">dynamic</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="proxy_static_fields">
+                    <div class="settings-row">
+                        <div class="settings-label">静态代理列表</div>
+                        <div class="settings-field">
+                            <textarea id="setting_proxy_urls" placeholder="socks5://127.0.0.1:1080&#10;http://127.0.0.1:8080"></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div id="proxy_dynamic_fields" style="display:none;">
+                    <div class="settings-row">
+                        <div class="settings-label">动态代理API地址</div>
+                        <div class="settings-field">
+                            <input type="text" id="setting_dynamic_proxy_api_url" placeholder="https://api.proxy.com/get">
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">刷新间隔(秒)</div>
+                        <div class="settings-field">
+                            <input type="number" id="setting_dynamic_proxy_refresh_interval" placeholder="300">
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">JSON路径</div>
+                        <div class="settings-field">
+                            <input type="text" id="setting_dynamic_proxy_jq_path" placeholder=".data.proxy">
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">协议类型</div>
+                        <div class="settings-field">
+                            <select id="setting_dynamic_proxy_protocol">
+                                <option value="socks5">socks5</option>
+                                <option value="http">http</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">提取模式</div>
+                        <div class="settings-field">
+                            <select id="setting_dynamic_proxy_batch_mode">
+                                <option value="batch">batch</option>
+                                <option value="single">single</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">响应格式</div>
+                        <div class="settings-field">
+                            <select id="setting_dynamic_proxy_format">
+                                <option value="json">json</option>
+                                <option value="plain_text">plain_text</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">纯文本分隔符</div>
+                        <div class="settings-field">
+                            <select id="setting_dynamic_proxy_separator">
+                                <option value="newline">newline</option>
+                                <option value="comma">comma</option>
+                                <option value="space">space</option>
+                                <option value="semicolon">semicolon</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">认证用户名</div>
+                        <div class="settings-field">
+                            <input type="text" id="setting_dynamic_proxy_username" placeholder="">
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-label">认证密码</div>
+                        <div class="settings-field">
+                            <input type="password" id="setting_dynamic_proxy_password" placeholder="">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Group: Webhook 配置 -->
+            <div class="settings-group">
+                <div class="settings-group-title">Webhook 配置</div>
+                <div class="settings-row">
+                    <div class="settings-label">通知地址</div>
+                    <div class="settings-field">
+                        <input type="text" id="setting_webhook_url" placeholder="https://hooks.example.com/xxx">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-label">通知间隔(秒)</div>
+                    <div class="settings-field">
+                        <input type="number" id="setting_webhook_notification_interval" placeholder="60">
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-actions">
+                <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
             </div>
         </div>
 
@@ -786,7 +1088,66 @@
             if (e.key === 'Enter') testArticle();
         });
 
-        window.addEventListener('load', checkStatus);
+        // Load settings on page load
+        async function loadSettings() {
+            try {
+                var resp = await fetch('/api/admin/settings');
+                var data = await resp.json();
+                if (data.success) {
+                    data.data.forEach(function(item) {
+                        var el = document.getElementById('setting_' + item.key_name);
+                        if (el) el.value = item.value || '';
+                    });
+                    toggleProxyMode();
+                }
+            } catch(e) { console.error('Failed to load settings:', e); }
+        }
+
+        // Save settings
+        async function saveSettings() {
+            var settings = {};
+            var keys = [
+                'site_url', 'rate_limit_global', 'rate_limit_per_ip', 'rate_limit_article_interval',
+                'rss_poll_interval', 'articles_per_poll', 'rss_fetch_full_content',
+                'proxy_mode', 'proxy_urls', 'dynamic_proxy_api_url', 'dynamic_proxy_refresh_interval',
+                'dynamic_proxy_jq_path', 'dynamic_proxy_protocol', 'dynamic_proxy_batch_mode',
+                'dynamic_proxy_format', 'dynamic_proxy_separator', 'dynamic_proxy_username',
+                'dynamic_proxy_password', 'webhook_url', 'webhook_notification_interval'
+            ];
+            keys.forEach(function(key) {
+                var el = document.getElementById('setting_' + key);
+                if (el) settings[key] = el.value;
+            });
+            try {
+                var resp = await fetch('/api/admin/settings', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({settings: settings})
+                });
+                var data = await resp.json();
+                if (data.success) {
+                    alert('配置已保存');
+                } else {
+                    alert('保存失败: ' + (data.message || '未知错误'));
+                }
+            } catch(e) {
+                alert('保存失败: ' + e.message);
+            }
+        }
+
+        // Toggle proxy mode fields visibility
+        function toggleProxyMode() {
+            var mode = document.getElementById('setting_proxy_mode').value;
+            var staticFields = document.getElementById('proxy_static_fields');
+            var dynamicFields = document.getElementById('proxy_dynamic_fields');
+            if (staticFields) staticFields.style.display = mode === 'static' ? 'block' : 'none';
+            if (dynamicFields) dynamicFields.style.display = mode === 'dynamic' ? 'block' : 'none';
+        }
+
+        window.addEventListener('load', function() {
+            checkStatus();
+            loadSettings();
+        });
     </script>
 </body>
 </html>
