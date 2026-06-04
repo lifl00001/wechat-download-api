@@ -40,6 +40,9 @@ DEFAULT_SETTINGS = [
     ("dynamic_proxy_password", "DYNAMIC_PROXY_PASSWORD", "", "动态代理认证密码"),
     ("webhook_url", "WEBHOOK_URL", "", "Webhook通知地址（企业微信群机器人等）"),
     ("webhook_notification_interval", "WEBHOOK_NOTIFICATION_INTERVAL", "300", "同一事件通知最小间隔（秒）"),
+    ("baidu_api_key", "BAIDU_API_KEY", "", "百度千帆 API Key"),
+    ("tavily_api_key", "TAVILY_API_KEY", "", "Tavily API Key"),
+    ("news_search_interval", "NEWS_SEARCH_INTERVAL", "21600", "新闻搜索间隔（秒），默认6小时"),
 ]
 
 

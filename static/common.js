@@ -8,6 +8,7 @@
     var NAV_PAGES = [
         { path: '/admin.html',       label: '管理面板', icon: '📊' },
         { path: '/rss.html',         label: '订阅公众号',  icon: '📡' },
+        { path: '/news.html',        label: '新闻搜索', icon: '🔍' },
         { path: '/blacklist.html',   label: '黑名单',   icon: '🚫' },
         { path: '/history.html',     label: '历史文章', icon: '📜' },
         { path: '/articles.html',    label: '文章库',   icon: '📚' },
@@ -166,6 +167,11 @@
             title: '文章库',
             desc: '浏览本地数据库中已缓存的所有文章，支持搜索、筛选、查看详情。',
             tip: '💡 提示：文章正文中图片已自动代理，可直接在 RSS 阅读器中显示。'
+        },
+        '/news.html': {
+            title: '新闻搜索',
+            desc: '配置百度+Tavily双引擎新闻搜索源，定时采集投资日报所需的新闻数据。',
+            tip: '💡 提示：百度擅长中文财经新闻，Tavily擅长全球英文新闻+全文。两者互补使用效果最佳。'
         }
     };
 

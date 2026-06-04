@@ -21,9 +21,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
 # 导入路由
-from routes import article, articles, search, admin, login, image, health, stats, rss, account
+from routes import article, articles, search, admin, login, image, health, stats, rss, account, news
 from utils.rss_store import init_db
 from utils.rss_poller import rss_poller
+from utils.news_store import init_news_db
+from utils.news_fetcher import news_searcher
 
 API_DESCRIPTION = """
 微信公众号文章下载 API，支持文章解析、公众号搜索、文章列表获取等功能。
@@ -58,14 +60,19 @@ async def lifespan(app: FastAPI):
         print("=" * 60 + "\n")
 
     init_db()
+    init_news_db()
     await rss_poller.start()
     
     # 启动登录过期提醒器（自动检测凭证有效期并 webhook 通知）
     from utils.login_reminder import login_reminder
     await login_reminder.start()
-    
+
+    # 启动新闻搜索定时任务
+    await news_searcher.start()
+
     yield
-    
+
+    await news_searcher.stop()
     await login_reminder.stop()
     await rss_poller.stop()
 
@@ -104,6 +111,7 @@ app.include_router(admin.router, prefix="/api/admin", tags=["管理"])
 app.include_router(login.router, prefix="/api/login", tags=["登录"])
 app.include_router(image.router, prefix="/api", tags=["图片代理"])
 app.include_router(rss.router, prefix="/api", tags=["RSS 订阅"])
+app.include_router(news.router, prefix="/api/news", tags=["新闻搜索"])
 
 # 静态文件
 static_dir = Path(__file__).parent / "static"
@@ -170,6 +178,11 @@ async def history_page():
 async def articles_page():
     """文章库页面"""
     return FileResponse(static_dir / "articles.html")
+
+@app.get("/news.html", include_in_schema=False)
+async def news_page():
+    """新闻搜索页面"""
+    return FileResponse(static_dir / "news.html")
 
 if __name__ == "__main__":
     import os

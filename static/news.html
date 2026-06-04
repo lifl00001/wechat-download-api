@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/static/common.css">
+    <title>新闻搜索 - WeChat Download API</title>
+    <style>
+        :root {
+            --primary-color: #1890ff;
+            --success-color: #52c41a;
+            --warning-color: #fa8c16;
+            --error-color: #ff4d4f;
+            --text-primary: #262626;
+            --text-secondary: #595959;
+            --text-muted: #8c8c8c;
+            --bg-primary: #ffffff;
+            --bg-secondary: #fafafa;
+            --border-light: #f0f0f0;
+            --border-base: #d9d9d9;
+            --shadow-light: 0 2px 8px rgba(0, 0, 0, 0.06);
+            --shadow-base: 0 4px 12px rgba(0, 0, 0, 0.08);
+            --radius-small: 4px;
+            --radius-base: 8px;
+            --radius-large: 12px;
+            --font-xs: 12px;
+            --font-sm: 14px;
+            --font-base: 16px;
+            --font-lg: 20px;
+            --font-xl: 24px;
+            --space-xs: 4px;
+            --space-sm: 8px;
+            --space-md: 16px;
+            --space-lg: 24px;
+            --space-xl: 32px;
+            --duration-fast: 200ms;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        .layout { max-width: 1200px; margin: 0 auto; padding: var(--space-xl) var(--space-lg); }
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-xl); flex-wrap: wrap; gap: var(--space-md); }
+        .header-left h1 { font-size: var(--font-xl); font-weight: 700; }
+        .header-left p { font-size: var(--font-sm); color: var(--text-secondary); margin-top: var(--space-xs); }
+        .header-right { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
+
+        /* ── 按钮 ───────────────────────────────────────── */
+        .btn-sm {
+            padding: 6px 16px; border-radius: var(--radius-base); font-size: var(--font-xs); font-weight: 600;
+            cursor: pointer; border: 1px solid var(--border-base); background: var(--bg-primary);
+            color: var(--text-primary); text-decoration: none; display: inline-flex; align-items: center;
+            transition: all var(--duration-fast); gap: 4px;
+        }
+        .btn-sm:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .btn-sm.btn-primary { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+        .btn-sm.btn-primary:hover { background: #096dd9; }
+        .btn-sm.btn-danger { border-color: var(--error-color); color: var(--error-color); }
+        .btn-sm.btn-danger:hover { background: var(--error-color); color: #fff; }
+        .btn-sm.btn-success { border-color: var(--success-color); color: var(--success-color); }
+        .btn-sm.btn-success:hover { background: var(--success-color); color: #fff; }
+
+        /* ── Section ────────────────────────────────────── */
+        .section {
+            background: var(--bg-primary); border: 1px solid var(--border-light);
+            border-radius: var(--radius-large); box-shadow: var(--shadow-light);
+            padding: var(--space-lg); margin-bottom: var(--space-lg);
+        }
+        .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-md); flex-wrap: wrap; gap: var(--space-sm); }
+        .section h2 { font-size: var(--font-base); font-weight: 600; }
+
+        /* ── Tab 导航 ───────────────────────────────────── */
+        .tabs {
+            display: flex; gap: 0; border-bottom: 2px solid var(--border-light);
+            margin-bottom: var(--space-lg);
+        }
+        .tab {
+            padding: 10px 24px; font-size: var(--font-sm); font-weight: 600;
+            cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px;
+            color: var(--text-muted); transition: all var(--duration-fast);
+            background: none; border-top: none; border-left: none; border-right: none;
+        }
+        .tab:hover { color: var(--primary-color); }
+        .tab.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ── 状态指示器 ─────────────────────────────────── */
+        .status-dot {
+            display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+        }
+        .status-dot.running { background: var(--success-color); box-shadow: 0 0 6px rgba(82, 196, 26, 0.4); }
+        .status-dot.stopped { background: var(--text-muted); }
+
+        /* ── 搜索源表格 ─────────────────────────────────── */
+        .source-table {
+            width: 100%; border-collapse: collapse; font-size: var(--font-sm);
+        }
+        .source-table th {
+            text-align: left; padding: 10px 12px; border-bottom: 2px solid var(--border-light);
+            font-weight: 600; color: var(--text-secondary); white-space: nowrap;
+        }
+        .source-table td {
+            padding: 10px 12px; border-bottom: 1px solid var(--border-light);
+            vertical-align: middle;
+        }
+        .source-table tr:hover { background: var(--bg-secondary); }
+        .source-table .engine-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+        .engine-tag {
+            display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+        }
+        .engine-tag.baidu { background: #e6f7ff; color: #1890ff; }
+        .engine-tag.tavily { background: #f6ffed; color: #52c41a; }
+
+        .toggle-switch {
+            position: relative; width: 36px; height: 20px; background: var(--border-base);
+            border-radius: 10px; cursor: pointer; transition: background var(--duration-fast);
+            border: none; padding: 0;
+        }
+        .toggle-switch.on { background: var(--success-color); }
+        .toggle-switch::after {
+            content: ''; position: absolute; top: 2px; left: 2px;
+            width: 16px; height: 16px; border-radius: 50%; background: #fff;
+            transition: left var(--duration-fast);
+        }
+        .toggle-switch.on::after { left: 18px; }
+
+        /* ── 筛选栏 ─────────────────────────────────────── */
+        .filter-bar {
+            display: flex; gap: var(--space-sm); margin-bottom: var(--space-md);
+            flex-wrap: wrap; align-items: center;
+        }
+        .filter-bar select, .filter-bar input {
+            padding: 8px 12px; border: 1px solid var(--border-base);
+            border-radius: var(--radius-base); font-size: var(--font-sm); outline: none;
+            background: var(--bg-primary);
+        }
+        .filter-bar select:focus, .filter-bar input:focus { border-color: var(--primary-color); }
+
+        /* ── 新闻卡片 ───────────────────────────────────── */
+        .news-grid { display: grid; gap: var(--space-md); }
+        .news-card {
+            border: 1px solid var(--border-light); border-radius: var(--radius-base);
+            padding: var(--space-md); transition: box-shadow var(--duration-fast);
+        }
+        .news-card:hover { box-shadow: var(--shadow-base); }
+        .news-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-sm); }
+        .news-card-title {
+            font-size: var(--font-sm); font-weight: 600; color: var(--text-primary);
+            text-decoration: none; line-height: 1.5;
+        }
+        .news-card-title:hover { color: var(--primary-color); }
+        .news-card-meta {
+            display: flex; gap: var(--space-sm); align-items: center; margin-top: var(--space-xs);
+            font-size: var(--font-xs); color: var(--text-muted); flex-wrap: wrap;
+        }
+        .news-card-snippet {
+            margin-top: var(--space-sm); font-size: var(--font-xs); color: var(--text-secondary);
+            line-height: 1.6; max-height: 60px; overflow: hidden;
+        }
+        .news-card-full {
+            margin-top: var(--space-sm); font-size: var(--font-xs); color: var(--text-secondary);
+            line-height: 1.8; max-height: 400px; overflow-y: auto; white-space: pre-wrap;
+            padding: var(--space-sm); background: var(--bg-secondary); border-radius: var(--radius-small);
+        }
+        .score-bar {
+            display: inline-block; height: 4px; border-radius: 2px;
+            background: linear-gradient(90deg, var(--primary-color), var(--success-color));
+        }
+
+        /* ── 分页 ────────────────────────────────────────── */
+        .pagination {
+            display: flex; justify-content: center; gap: var(--space-xs); margin-top: var(--space-lg);
+        }
+        .page-btn {
+            padding: 6px 14px; border: 1px solid var(--border-base); border-radius: var(--radius-base);
+            background: var(--bg-primary); font-size: var(--font-xs); cursor: pointer;
+            transition: all var(--duration-fast);
+        }
+        .page-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .page-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+        .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* ── Modal ──────────────────────────────────────── */
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4); z-index: 2000; align-items: center; justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: var(--bg-primary); border-radius: var(--radius-large);
+            box-shadow: var(--shadow-base); width: 90%; max-width: 560px;
+            max-height: 85vh; overflow-y: auto; padding: var(--space-lg);
+        }
+        .modal h3 { font-size: var(--font-lg); font-weight: 700; margin-bottom: var(--space-md); }
+        .form-group { margin-bottom: var(--space-md); }
+        .form-group label {
+            display: block; font-size: var(--font-xs); font-weight: 600;
+            color: var(--text-secondary); margin-bottom: var(--space-xs);
+        }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%; padding: 10px 14px; border: 1px solid var(--border-base);
+            border-radius: var(--radius-base); font-size: var(--font-sm); outline: none;
+        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            border-color: var(--primary-color);
+        }
+        .form-group .hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        .form-row { display: flex; gap: var(--space-md); }
+        .form-row .form-group { flex: 1; }
+        .form-actions { display: flex; justify-content: flex-end; gap: var(--space-sm); margin-top: var(--space-lg); }
+        .checkbox-group { display: flex; gap: var(--space-md); }
+        .checkbox-group label { display: flex; align-items: center; gap: 6px; font-size: var(--font-sm); cursor: pointer; }
+
+        /* ── 日报视图 ───────────────────────────────────── */
+        .report-summary {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: var(--space-md); margin-bottom: var(--space-lg);
+        }
+        .report-stat {
+            text-align: center; padding: var(--space-md);
+            background: var(--bg-secondary); border-radius: var(--radius-base);
+        }
+        .report-stat .num { font-size: var(--font-xl); font-weight: 700; color: var(--primary-color); }
+        .report-stat .label { font-size: var(--font-xs); color: var(--text-muted); }
+
+        .empty { text-align: center; padding: var(--space-xl); color: var(--text-muted); }
+        .loading { text-align: center; padding: var(--space-lg); color: var(--text-muted); }
+        .api-key-warning {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 16px; margin-bottom: var(--space-md);
+            background: #fff7e6; border: 1px solid #ffd591; border-radius: var(--radius-base);
+            font-size: var(--font-xs); color: #ad6800;
+        }
+        .api-key-warning a { color: #1890ff; font-weight: 600; cursor: pointer; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <div class="header">
+            <div class="header-left">
+                <h1>新闻搜索</h1>
+                <p>配置新闻搜索源，定时采集投资新闻数据</p>
+            </div>
+            <div class="header-right">
+                <a href="/admin.html" class="btn-sm">返回面板</a>
+            </div>
+        </div>
+
+        <!-- Tab 导航 -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('sources')">搜索源管理</button>
+            <button class="tab" onclick="switchTab('settings')">定时任务</button>
+            <button class="tab" onclick="switchTab('items')">新闻浏览</button>
+            <button class="tab" onclick="switchTab('report')">日报数据</button>
+        </div>
+
+        <!-- ── Tab 1: 搜索源管理 ────────────────────────── -->
+        <div class="tab-content active" id="tab-sources">
+            <div class="section">
+                <div class="section-header">
+                    <h2>搜索源列表</h2>
+                    <button class="btn-sm btn-primary" onclick="openSourceModal()">+ 新建搜索源</button>
+                </div>
+                <div id="sourceList"><div class="loading">加载中...</div></div>
+            </div>
+        </div>
+
+        <!-- ── Tab 2: 定时任务 ──────────────────────────── -->
+        <div class="tab-content" id="tab-settings">
+            <div class="section">
+                <div class="section-header">
+                    <h2>搜索器状态</h2>
+                    <button class="btn-sm btn-primary" id="btnTrigger" onclick="triggerAll()">立即执行全部</button>
+                </div>
+                <div id="searcherStatus"><div class="loading">加载中...</div></div>
+            </div>
+            <div class="section">
+                <h2>API Key 配置</h2>
+                <p style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:var(--space-md);">百度和 Tavily 的 API Key 是搜索的必要条件，请先配置后再使用。</p>
+                <div class="form-group">
+                    <label>百度千帆 API Key</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="password" id="settingBaiduKey" placeholder="bce-v3/ALTAK-..." style="flex:1;">
+                        <button class="btn-sm" onclick="toggleKeyVisibility('settingBaiduKey')">显示</button>
+                    </div>
+                    <div class="hint">从 console.bce.baidu.com 获取，免费 1500 次/月</div>
+                </div>
+                <div class="form-group">
+                    <label>Tavily API Key</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="password" id="settingTavilyKey" placeholder="tvly-..." style="flex:1;">
+                        <button class="btn-sm" onclick="toggleKeyVisibility('settingTavilyKey')">显示</button>
+                    </div>
+                    <div class="hint">从 app.tavily.com 获取，免费 1000 次/月</div>
+                </div>
+                <div style="display:flex;justify-content:flex-end;gap:8px;">
+                    <button class="btn-sm btn-primary" onclick="saveApiKeys()">保存 API Key</button>
+                </div>
+            </div>
+            <div class="section">
+                <h2>搜索间隔配置</h2>
+                <div class="form-group">
+                    <label>搜索间隔（分钟）</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="number" id="intervalMin" min="1" max="1440" style="width:120px;" placeholder="360">
+                        <button class="btn-sm btn-primary" onclick="saveInterval()">保存</button>
+                        <span id="intervalHint" class="hint"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Tab 3: 新闻浏览 ──────────────────────────── -->
+        <div class="tab-content" id="tab-items">
+            <div class="section">
+                <div class="section-header"><h2>新闻列表</h2></div>
+                <div class="filter-bar">
+                    <select id="filterCategory" onchange="loadItems()">
+                        <option value="">全部分类</option>
+                    </select>
+                    <select id="filterEngine" onchange="loadItems()">
+                        <option value="">全部引擎</option>
+                        <option value="baidu">百度</option>
+                        <option value="tavily">Tavily</option>
+                    </select>
+                    <select id="filterSource" onchange="loadItems()">
+                        <option value="">全部来源</option>
+                    </select>
+                    <input type="date" id="filterDateFrom" onchange="loadItems()" style="width:150px;">
+                    <span style="color:var(--text-muted);">至</span>
+                    <input type="date" id="filterDateTo" onchange="loadItems()" style="width:150px;">
+                    <input type="text" id="filterKeyword" placeholder="关键词搜索" style="width:160px;" onkeydown="if(event.key==='Enter')loadItems()">
+                    <button class="btn-sm" onclick="loadItems()">搜索</button>
+                </div>
+                <div id="newsList"><div class="loading">加载中...</div></div>
+                <div id="pagination" class="pagination"></div>
+            </div>
+        </div>
+
+        <!-- ── Tab 4: 日报数据 ──────────────────────────── -->
+        <div class="tab-content" id="tab-report">
+            <div class="section">
+                <div class="section-header"><h2>日报数据</h2></div>
+                <div class="filter-bar">
+                    <select id="reportCategory" onchange="loadReport()">
+                        <option value="">全部分类</option>
+                    </select>
+                    <input type="date" id="reportDate" onchange="loadReport()" style="width:150px;">
+                    <button class="btn-sm" onclick="loadReport()">查询</button>
+                </div>
+                <div id="reportSummary"></div>
+                <div id="reportList"><div class="loading">请选择日期后查询</div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 新建/编辑搜索源 Modal ─────────────────────── -->
+    <div class="modal-overlay" id="sourceModal">
+        <div class="modal">
+            <h3 id="modalTitle">新建搜索源</h3>
+            <input type="hidden" id="editSourceId">
+            <div class="form-group">
+                <label>名称 *</label>
+                <input type="text" id="srcName" placeholder="如：AI投资">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>百度搜索关键词</label>
+                    <input type="text" id="srcQueryBaidu" placeholder="如：AI 投资 融资 最新动态">
+                </div>
+                <div class="form-group">
+                    <label>Tavily 搜索关键词</label>
+                    <input type="text" id="srcQueryTavily" placeholder="如：AI investment funding latest">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>关联分类</label>
+                <select id="srcCategory"><option value="">无分类</option></select>
+            </div>
+            <div class="form-group">
+                <label>搜索引擎</label>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="srcEngineBaidu" checked> 百度</label>
+                    <label><input type="checkbox" id="srcEngineTavily" checked> Tavily</label>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>百度时效过滤</label>
+                    <select id="srcBaiduRecency">
+                        <option value="day">当天</option>
+                        <option value="week" selected>最近一周</option>
+                        <option value="month">最近一月</option>
+                        <option value="semiyear">最近半年</option>
+                        <option value="year">最近一年</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Tavily 时间范围（天）</label>
+                    <input type="number" id="srcTavilyDays" value="7" min="1" max="365">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>每引擎最大结果数</label>
+                <input type="number" id="srcMaxResults" value="10" min="1" max="50">
+            </div>
+            <div class="form-actions">
+                <button class="btn-sm" onclick="closeSourceModal()">取消</button>
+                <button class="btn-sm btn-primary" onclick="saveSource()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ── 全局状态 ─────────────────────────────────────────
+    var currentPage = 1;
+    var pageSize = 20;
+    var categories = [];
+
+    // ── Tab 切换 ─────────────────────────────────────────
+    function switchTab(name) {
+        document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+        document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
+        event.target.classList.add('active');
+        document.getElementById('tab-' + name).classList.add('active');
+        if (name === 'sources') loadSources();
+        if (name === 'settings') loadSearcherStatus();
+        if (name === 'items') loadItems();
+        if (name === 'report') loadReport();
+    }
+
+    function switchTabByName(name) {
+        // 程序化切换 tab（非用户点击，无 event）
+        var tabIndex = { sources: 0, settings: 1, items: 2, report: 3 };
+        var tabs = document.querySelectorAll('.tab');
+        var idx = tabIndex[name] || 0;
+        tabs.forEach(function(t) { t.classList.remove('active'); });
+        document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
+        if (tabs[idx]) tabs[idx].classList.add('active');
+        document.getElementById('tab-' + name).classList.add('active');
+        if (name === 'settings') loadSearcherStatus();
+    }
+
+    // ── 工具函数 ─────────────────────────────────────────
+    function escHtml(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function timeAgo(ts) {
+        if (!ts) return '从未';
+        var diff = Math.floor(Date.now() / 1000) - ts;
+        if (diff < 60) return diff + '秒前';
+        if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
+        if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
+        return Math.floor(diff / 86400) + '天前';
+    }
+    // 使用 common.js 提供的 showToast（右上角白色卡片样式）
+    function showToast(msg) { window.showToast(msg, 'info'); }
+    function showToastSuccess(msg) { window.showToast(msg, 'success'); }
+    function showToastError(msg) { window.showToast(msg, 'error'); }
+
+    // ── 加载分类列表（用于下拉框）────────────────────────
+    async function loadCategories() {
+        try {
+            var res = await fetch('/api/admin/categories');
+            var d = await res.json();
+            categories = d.categories || [];
+            var opts = '<option value="">无分类</option>';
+            categories.forEach(function(c) {
+                opts += '<option value="' + c.id + '">' + escHtml(c.name) + '</option>';
+            });
+            // 更新所有分类下拉框
+            ['srcCategory', 'filterCategory', 'reportCategory'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) {
+                    var val = el.value;
+                    el.innerHTML = id === 'filterCategory' || id === 'reportCategory'
+                        ? '<option value="">全部分类</option>' + opts.replace('无分类', '全部分类')
+                        : opts;
+                    el.value = val;
+                }
+            });
+        } catch (e) { console.error('loadCategories error:', e); }
+    }
+
+    // ── Tab 1: 搜索源管理 ─────────────────────────────────
+    var _apiKeysConfigured = { baidu: false, tavily: false };
+
+    async function checkApiKeys() {
+        try {
+            var res = await fetch('/api/admin/settings');
+            var d = await res.json();
+            (d.data || []).forEach(function(item) {
+                if (item.key_name === 'baidu_api_key' && item.value) _apiKeysConfigured.baidu = true;
+                if (item.key_name === 'tavily_api_key' && item.value) _apiKeysConfigured.tavily = true;
+            });
+        } catch(e) {}
+    }
+
+    async function loadSources() {
+        var el = document.getElementById('sourceList');
+        try {
+            var res = await fetch('/api/news/sources');
+            var d = await res.json();
+            var sources = d.sources || [];
+
+            // API Key 未配置警告
+            var warning = '';
+            if (!_apiKeysConfigured.baidu || !_apiKeysConfigured.tavily) {
+                var missing = [];
+                if (!_apiKeysConfigured.baidu) missing.push('百度');
+                if (!_apiKeysConfigured.tavily) missing.push('Tavily');
+                warning = '<div class="api-key-warning">⚠️ ' + missing.join('、') + ' API Key 未配置，<a onclick="switchTabByName(\'settings\')">前往配置</a></div>';
+            }
+
+            if (!sources.length) {
+                el.innerHTML = warning + '<div class="empty">暂无搜索源，请点击上方「新建搜索源」添加</div>';
+                return;
+            }
+            // 同时更新来源过滤下拉
+            var srcOpts = '<option value="">全部来源</option>';
+            var html = warning;
+            html += '<table class="source-table"><thead><tr>' +
+                '<th>名称</th><th>分类</th><th>百度关键词</th><th>Tavily关键词</th>' +
+                '<th>引擎</th><th>启用</th><th>上次搜索</th><th>条目数</th><th>操作</th>' +
+                '</tr></thead><tbody>';
+            sources.forEach(function(s) {
+                var engines = [];
+                try { engines = JSON.parse(s.search_engines || '[]'); } catch(e) {}
+                srcOpts += '<option value="' + s.id + '">' + escHtml(s.name) + '</option>';
+                var engineHtml = '<div class="engine-tags">';
+                engines.forEach(function(e) {
+                    engineHtml += '<span class="engine-tag ' + e + '">' + e + '</span>';
+                });
+                engineHtml += '</div>';
+                html += '<tr>';
+                html += '<td><strong>' + escHtml(s.name) + '</strong></td>';
+                html += '<td>' + escHtml(s.category_name || '-') + '</td>';
+                html += '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(s.query_baidu) + '">' + escHtml(s.query_baidu || '-') + '</td>';
+                html += '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(s.query_tavily) + '">' + escHtml(s.query_tavily || '-') + '</td>';
+                html += '<td>' + engineHtml + '</td>';
+                html += '<td><button class="toggle-switch ' + (s.is_active ? 'on' : '') + '" onclick="toggleSource(' + s.id + ',' + (s.is_active ? 0 : 1) + ')"></button></td>';
+                html += '<td style="white-space:nowrap;">' + timeAgo(s.last_search_at) + '</td>';
+                html += '<td>' + (s.item_count || 0) + '</td>';
+                html += '<td style="white-space:nowrap;">';
+                html += '<button class="btn-sm btn-success" onclick="searchSource(' + s.id + ')">搜索</button> ';
+                html += '<button class="btn-sm" onclick="editSource(' + s.id + ')">编辑</button> ';
+                html += '<button class="btn-sm btn-danger" onclick="deleteSource(' + s.id + ')">删除</button>';
+                html += '</td></tr>';
+            });
+            html += '</tbody></table>';
+            el.innerHTML = html;
+            // 更新来源过滤
+            var fSrc = document.getElementById('filterSource');
+            if (fSrc) { var v = fSrc.value; fSrc.innerHTML = srcOpts; fSrc.value = v; }
+        } catch (e) {
+            el.innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>';
+        }
+    }
+
+    function openSourceModal(id) {
+        document.getElementById('editSourceId').value = id || '';
+        document.getElementById('modalTitle').textContent = id ? '编辑搜索源' : '新建搜索源';
+        if (!id) {
+            document.getElementById('srcName').value = '';
+            document.getElementById('srcQueryBaidu').value = '';
+            document.getElementById('srcQueryTavily').value = '';
+            document.getElementById('srcCategory').value = '';
+            document.getElementById('srcEngineBaidu').checked = true;
+            document.getElementById('srcEngineTavily').checked = true;
+            document.getElementById('srcBaiduRecency').value = 'week';
+            document.getElementById('srcTavilyDays').value = '7';
+            document.getElementById('srcMaxResults').value = '10';
+        }
+        document.getElementById('sourceModal').classList.add('show');
+    }
+
+    function closeSourceModal() {
+        document.getElementById('sourceModal').classList.remove('show');
+    }
+
+    async function editSource(id) {
+        try {
+            var res = await fetch('/api/news/sources');
+            var d = await res.json();
+            var s = (d.sources || []).find(function(x) { return x.id === id; });
+            if (!s) { showToast('搜索源不存在'); return; }
+            openSourceModal(id);
+            document.getElementById('srcName').value = s.name || '';
+            document.getElementById('srcQueryBaidu').value = s.query_baidu || '';
+            document.getElementById('srcQueryTavily').value = s.query_tavily || '';
+            document.getElementById('srcCategory').value = s.category_id || '';
+            var engines = [];
+            try { engines = JSON.parse(s.search_engines || '[]'); } catch(e) {}
+            document.getElementById('srcEngineBaidu').checked = engines.indexOf('baidu') >= 0;
+            document.getElementById('srcEngineTavily').checked = engines.indexOf('tavily') >= 0;
+            document.getElementById('srcBaiduRecency').value = s.baidu_recency || 'week';
+            document.getElementById('srcTavilyDays').value = s.tavily_days || 7;
+            document.getElementById('srcMaxResults').value = s.max_results || 10;
+        } catch (e) { showToast('加载失败: ' + e.message); }
+    }
+
+    async function saveSource() {
+        var id = document.getElementById('editSourceId').value;
+        var name = document.getElementById('srcName').value.trim();
+        if (!name) { showToast('请输入名称'); return; }
+        var engines = [];
+        if (document.getElementById('srcEngineBaidu').checked) engines.push('baidu');
+        if (document.getElementById('srcEngineTavily').checked) engines.push('tavily');
+        var body = {
+            name: name,
+            query_baidu: document.getElementById('srcQueryBaidu').value.trim(),
+            query_tavily: document.getElementById('srcQueryTavily').value.trim(),
+            category_id: document.getElementById('srcCategory').value || null,
+            search_engines: JSON.stringify(engines),
+            baidu_recency: document.getElementById('srcBaiduRecency').value,
+            tavily_days: parseInt(document.getElementById('srcTavilyDays').value) || 7,
+            max_results: parseInt(document.getElementById('srcMaxResults').value) || 10,
+        };
+        try {
+            var url = id ? '/api/news/sources/' + id : '/api/news/sources';
+            var method = id ? 'PATCH' : 'POST';
+            var res = await fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            var d = await res.json();
+            if (d.success) {
+                showToastSuccess(d.message || '保存成功');
+                closeSourceModal();
+                loadSources();
+            } else {
+                showToast(d.detail || d.message || '操作失败');
+            }
+        } catch (e) { showToast('网络错误: ' + e.message); }
+    }
+
+    async function deleteSource(id) {
+        if (!confirm('确定删除此搜索源？关联的新闻条目也将被删除。')) return;
+        try {
+            var res = await fetch('/api/news/sources/' + id, { method: 'DELETE' });
+            var d = await res.json();
+            showToast(d.message || '已删除');
+            loadSources();
+        } catch (e) { showToast('网络错误: ' + e.message); }
+    }
+
+    async function toggleSource(id, active) {
+        try {
+            await fetch('/api/news/sources/' + id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_active: active }),
+            });
+            loadSources();
+        } catch (e) { showToast('操作失败: ' + e.message); }
+    }
+
+    async function searchSource(id) {
+        showToast('正在搜索...', 'info');
+        try {
+            var res = await fetch('/api/news/sources/' + id + '/search', { method: 'POST' });
+            var d = await res.json();
+            if (d.success && d.saved > 0) {
+                showToastSuccess(d.message || '搜索完成，新增 ' + d.saved + ' 条');
+            } else if (d.success && d.saved === 0) {
+                showToastError('搜索完成但未找到新结果。请检查 API Key 是否已配置（定时任务 tab），以及搜索关键词是否有效。');
+            } else {
+                showToastError(d.detail || d.message || '搜索失败');
+            }
+            loadSources();
+        } catch (e) { showToastError('搜索失败: ' + e.message); }
+    }
+
+    // ── Tab 2: 定时任务 ─────────────────────────────────
+    async function loadSearcherStatus() {
+        var el = document.getElementById('searcherStatus');
+        try {
+            var res = await fetch('/api/news/status');
+            var d = await res.json();
+            var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">';
+            html += '<div class="report-stat"><div class="num"><span class="status-dot ' + (d.running ? 'running' : 'stopped') + '"></span>' + (d.running ? '运行中' : '已停止') + '</div><div class="label">状态</div></div>';
+            html += '<div class="report-stat"><div class="num">' + (d.active_sources || 0) + '</div><div class="label">活跃搜索源</div></div>';
+            html += '<div class="report-stat"><div class="num">' + (d.items_today || 0) + '</div><div class="label">今日新增</div></div>';
+            html += '<div class="report-stat"><div class="num">' + timeAgo(d.last_search_at) + '</div><div class="label">上次搜索</div></div>';
+            html += '</div>';
+            if (d.last_search_results) {
+                html += '<div style="margin-top:12px;font-size:12px;color:var(--text-muted);">上次结果: ' + escHtml(d.last_search_results) + '</div>';
+            }
+            el.innerHTML = html;
+
+            // 设置间隔输入框
+            var intervalSec = d.interval_seconds || 21600;
+            document.getElementById('intervalMin').value = Math.round(intervalSec / 60);
+            var hint = document.getElementById('intervalHint');
+            if (intervalSec >= 86400) hint.textContent = '（' + Math.round(intervalSec / 3600) + ' 小时）';
+            else hint.textContent = '（' + Math.round(intervalSec / 60) + ' 分钟）';
+        } catch (e) {
+            el.innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>';
+        }
+        // 同时加载 API Key（不显示具体值，只显示是否已设置）
+        try {
+            var res = await fetch('/api/admin/settings');
+            var d = await res.json();
+            var items = d.data || [];
+            items.forEach(function(item) {
+                if (item.key_name === 'baidu_api_key') {
+                    var el = document.getElementById('settingBaiduKey');
+                    if (el) el.value = item.value || '';
+                }
+                if (item.key_name === 'tavily_api_key') {
+                    var el = document.getElementById('settingTavilyKey');
+                    if (el) el.value = item.value || '';
+                }
+            });
+        } catch(e) {}
+    }
+
+    function toggleKeyVisibility(inputId) {
+        var el = document.getElementById(inputId);
+        el.type = el.type === 'password' ? 'text' : 'password';
+    }
+
+    async function saveApiKeys() {
+        var baiduKey = document.getElementById('settingBaiduKey').value.trim();
+        var tavilyKey = document.getElementById('settingTavilyKey').value.trim();
+        if (!baiduKey && !tavilyKey) {
+            showToastError('请至少填写一个 API Key');
+            return;
+        }
+        var settings = {};
+        if (baiduKey) settings['baidu_api_key'] = baiduKey;
+        if (tavilyKey) settings['tavily_api_key'] = tavilyKey;
+        try {
+            var res = await fetch('/api/admin/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: settings }),
+            });
+            var d = await res.json();
+            showToastSuccess('API Key 已保存，现在可以执行搜索了');
+        } catch (e) { showToastError('保存失败: ' + e.message); }
+    }
+
+    async function saveInterval() {
+        var min = parseInt(document.getElementById('intervalMin').value);
+        if (!min || min < 1) { showToast('请输入有效的分钟数'); return; }
+        var sec = min * 60;
+        try {
+            var res = await fetch('/api/admin/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: { news_search_interval: String(sec) } }),
+            });
+            var d = await res.json();
+            showToastSuccess('搜索间隔已更新为 ' + min + ' 分钟');
+            loadSearcherStatus();
+        } catch (e) { showToast('保存失败: ' + e.message); }
+    }
+
+    async function triggerAll() {
+        var btn = document.getElementById('btnTrigger');
+        btn.disabled = true; btn.textContent = '搜索中...';
+        try {
+            var res = await fetch('/api/news/trigger', { method: 'POST' });
+            var d = await res.json();
+            if (d.success && d.saved > 0) {
+                showToastSuccess(d.message || '搜索完成');
+            } else if (d.success && d.saved === 0) {
+                showToastError('搜索完成但无新结果。请检查 API Key 配置和搜索源关键词。');
+            } else {
+                showToastError(d.detail || d.message || '搜索失败');
+            }
+            loadSearcherStatus();
+        } catch (e) { showToastError('搜索失败: ' + e.message); }
+        finally { btn.disabled = false; btn.textContent = '立即执行全部'; }
+    }
+
+    // ── Tab 3: 新闻浏览 ─────────────────────────────────
+    async function loadItems() {
+        var el = document.getElementById('newsList');
+        var params = new URLSearchParams();
+        params.set('page', currentPage);
+        params.set('page_size', pageSize);
+        var cat = document.getElementById('filterCategory').value;
+        var engine = document.getElementById('filterEngine').value;
+        var source = document.getElementById('filterSource').value;
+        var dateFrom = document.getElementById('filterDateFrom').value;
+        var dateTo = document.getElementById('filterDateTo').value;
+        var keyword = document.getElementById('filterKeyword').value.trim();
+        if (cat) params.set('category_id', cat);
+        if (engine) params.set('engine', engine);
+        if (source) params.set('source_id', source);
+        if (dateFrom) params.set('date_from', dateFrom);
+        if (dateTo) params.set('date_to', dateTo);
+        if (keyword) params.set('keyword', keyword);
+
+        try {
+            var res = await fetch('/api/news/items?' + params.toString());
+            var d = await res.json();
+            var items = d.items || [];
+            if (!items.length) {
+                el.innerHTML = '<div class="empty">暂无新闻数据，请先配置搜索源并执行搜索</div>';
+                document.getElementById('pagination').innerHTML = '';
+                return;
+            }
+            var html = '<div class="news-grid">';
+            items.forEach(function(item) {
+                var hasFull = item.full_text && item.full_text.length > 20;
+                var scoreWidth = Math.round((item.relevance_score || 0) * 100);
+                html += '<div class="news-card" id="card-' + item.id + '">';
+                html += '<div class="news-card-header">';
+                html += '<a class="news-card-title" href="' + escHtml(item.url) + '" target="_blank" rel="noopener">' + escHtml(item.title || '(无标题)') + '</a>';
+                html += '<span class="engine-tag ' + (item.source_engine || '') + '">' + escHtml(item.source_engine) + '</span>';
+                html += '</div>';
+                html += '<div class="news-card-meta">';
+                if (item.source_name) html += '<span>' + escHtml(item.source_name) + '</span>';
+                if (item.published_date) html += '<span>' + escHtml(item.published_date).substring(0, 10) + '</span>';
+                if (item.relevance_score > 0) html += '<span>相关度: ' + (item.relevance_score * 100).toFixed(0) + '%</span>';
+                if (item.category_name) html += '<span style="color:var(--primary-color);">' + escHtml(item.category_name) + '</span>';
+                html += '</div>';
+                if (item.snippet) {
+                    html += '<div class="news-card-snippet" id="snippet-' + item.id + '">' + escHtml(item.snippet.substring(0, 200)) + '</div>';
+                }
+                html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">';
+                if (hasFull) {
+                    html += '<button class="btn-sm" onclick="toggleFull(' + item.id + ')" id="toggle-btn-' + item.id + '">展开全文 (' + item.full_text.length + '字)</button>';
+                    html += '<div class="news-card-full" id="full-' + item.id + '" style="display:none;">' + escHtml(item.full_text.substring(0, 5000)) + (item.full_text.length > 5000 ? '\n\n... (全文共 ' + item.full_text.length + ' 字)' : '') + '</div>';
+                } else {
+                    html += '<button class="btn-sm btn-success" onclick="fetchItemContent(' + item.id + ')" id="fetch-btn-' + item.id + '">抓取全文</button>';
+                    html += '<div class="news-card-full" id="full-' + item.id + '" style="display:none;"></div>';
+                }
+                html += '</div>';
+                html += '</div>';
+            });
+            html += '</div>';
+            el.innerHTML = html;
+            renderPagination(d.page, d.pages);
+        } catch (e) {
+            el.innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>';
+        }
+    }
+
+    function toggleFull(id) {
+        var full = document.getElementById('full-' + id);
+        var btn = document.getElementById('toggle-btn-' + id);
+        if (full.style.display === 'none') {
+            full.style.display = 'block';
+            btn.textContent = '收起全文';
+        } else {
+            full.style.display = 'none';
+            btn.textContent = '展开全文';
+        }
+    }
+
+    async function fetchItemContent(id) {
+        var btn = document.getElementById('fetch-btn-' + id);
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = '抓取中...';
+        try {
+            var res = await fetch('/api/news/items/' + id + '/fetch-content', { method: 'POST' });
+            var d = await res.json();
+            if (d.success) {
+                showToastSuccess('全文抓取成功（' + d.content_length + ' 字）');
+                // 重新加载列表以显示全文
+                loadItems();
+            } else {
+                showToastError(d.detail || '抓取失败');
+                btn.disabled = false;
+                btn.textContent = '抓取全文';
+            }
+        } catch (e) {
+            showToastError('抓取失败: ' + e.message);
+            btn.disabled = false;
+            btn.textContent = '抓取全文';
+        }
+    }
+
+    function renderPagination(page, pages) {
+        if (pages <= 1) { document.getElementById('pagination').innerHTML = ''; return; }
+        var html = '';
+        html += '<button class="page-btn" ' + (page <= 1 ? 'disabled' : '') + ' onclick="goPage(' + (page - 1) + ')">上一页</button>';
+        var start = Math.max(1, page - 2);
+        var end = Math.min(pages, page + 2);
+        for (var i = start; i <= end; i++) {
+            html += '<button class="page-btn ' + (i === page ? 'active' : '') + '" onclick="goPage(' + i + ')">' + i + '</button>';
+        }
+        html += '<button class="page-btn" ' + (page >= pages ? 'disabled' : '') + ' onclick="goPage(' + (page + 1) + ')">下一页</button>';
+        document.getElementById('pagination').innerHTML = html;
+    }
+
+    function goPage(p) { currentPage = p; loadItems(); }
+
+    // ── Tab 4: 日报数据 ─────────────────────────────────
+    async function loadReport() {
+        var el = document.getElementById('reportList');
+        var summaryEl = document.getElementById('reportSummary');
+        var params = new URLSearchParams();
+        var cat = document.getElementById('reportCategory').value;
+        var date = document.getElementById('reportDate').value;
+        if (cat) params.set('category_id', cat);
+        if (date) params.set('date', date);
+
+        try {
+            var res = await fetch('/api/news/daily-report?' + params.toString());
+            var d = await res.json();
+            var items = d.items || [];
+
+            // 摘要
+            var engines = {};
+            items.forEach(function(it) { engines[it.source_engine] = (engines[it.source_engine] || 0) + 1; });
+            var summaryHtml = '<div class="report-summary">';
+            summaryHtml += '<div class="report-stat"><div class="num">' + items.length + '</div><div class="label">去重新闻总数</div></div>';
+            Object.keys(engines).forEach(function(k) {
+                summaryHtml += '<div class="report-stat"><div class="num">' + engines[k] + '</div><div class="label">' + escHtml(k) + '</div></div>';
+            });
+            summaryHtml += '</div>';
+            summaryEl.innerHTML = summaryHtml;
+
+            if (!items.length) {
+                el.innerHTML = '<div class="empty">该日期暂无数据</div>';
+                return;
+            }
+
+            var html = '<div class="news-grid">';
+            items.forEach(function(item) {
+                var hasFull = item.full_text && item.full_text.length > 20;
+                html += '<div class="news-card">';
+                html += '<div class="news-card-header">';
+                html += '<a class="news-card-title" href="' + escHtml(item.url) + '" target="_blank" rel="noopener">' + escHtml(item.title || '(无标题)') + '</a>';
+                html += '<span class="engine-tag ' + (item.source_engine || '') + '">' + escHtml(item.source_engine) + '</span>';
+                html += '</div>';
+                html += '<div class="news-card-meta">';
+                if (item.published_date) html += '<span>' + escHtml(item.published_date).substring(0, 10) + '</span>';
+                if (item.relevance_score > 0) html += '<span>相关度: ' + (item.relevance_score * 100).toFixed(0) + '%</span>';
+                if (item.category_name) html += '<span style="color:var(--primary-color);">' + escHtml(item.category_name) + '</span>';
+                html += '</div>';
+                if (item.snippet) html += '<div class="news-card-snippet">' + escHtml(item.snippet.substring(0, 200)) + '</div>';
+                html += '</div>';
+            });
+            html += '</div>';
+            el.innerHTML = html;
+        } catch (e) {
+            el.innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>';
+        }
+    }
+
+    // ── 初始化 ─────────────────────────────────────────
+    window.addEventListener('load', function() {
+        loadCategories();
+        checkApiKeys().then(function() { loadSources(); });
+    });
+    </script>
+<script src="/static/common.js"></script>
+</body>
+</html>
