@@ -143,11 +143,11 @@
     .top-nav-user { display: none; }
 }
 
-/* 页面主体需要给导航栏让出空间 */
-body.has-top-nav {
+/* 页面主体需要给导航栏让出空间（直接设置，不靠JS加class，避免闪烁） */
+body {
     padding-top: 56px;
 }
-body.has-top-nav .layout {
+body .layout {
     padding-top: 24px;
 }
 
