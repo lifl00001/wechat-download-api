@@ -200,8 +200,8 @@
     // ── 初始化 ───────────────────────────────────────────
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() { loadUserInfo(); });
+        document.addEventListener('DOMContentLoaded', function() { injectNav(); });
     } else {
-        loadUserInfo();
+        injectNav();
     }
 })();
