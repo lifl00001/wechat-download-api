@@ -115,6 +115,7 @@
         }
         .engine-tag.baidu { background: #e6f7ff; color: #1890ff; }
         .engine-tag.tavily { background: #f6ffed; color: #52c41a; }
+        .engine-tag.aihot { background: #fff7e6; color: #fa8c16; }
 
         .toggle-switch {
             position: relative; width: 36px; height: 20px; background: var(--border-base);
@@ -378,6 +379,19 @@
                     <input type="text" id="srcQueryTavily" placeholder="如：AI investment funding latest">
                 </div>
             </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>AI HOT 关键词 <span style="color:#999;font-weight:normal">（空=拉全部精选，免费免Key）</span></label>
+                    <input type="text" id="srcQueryAihot" placeholder="如：OpenAI、芯片、机器人">
+                </div>
+                <div class="form-group">
+                    <label>AI HOT 模式</label>
+                    <select id="srcAihotMode">
+                        <option value="selected">精选（推荐）</option>
+                        <option value="all">全部</option>
+                    </select>
+                </div>
+            </div>
             <div class="form-group">
                 <label>关联分类</label>
                 <select id="srcCategory"><option value="">无分类</option></select>
@@ -387,6 +401,7 @@
                 <div class="checkbox-group">
                     <label><input type="checkbox" id="srcEngineBaidu" checked> 百度</label>
                     <label><input type="checkbox" id="srcEngineTavily" checked> Tavily</label>
+                    <label><input type="checkbox" id="srcEngineAihot"> AI HOT <span style="color:#52c41a;font-size:12px">免费</span></label>
                 </div>
             </div>
             <div class="form-row">
@@ -407,7 +422,7 @@
             </div>
             <div class="form-group">
                 <label>每引擎最大结果数</label>
-                <input type="number" id="srcMaxResults" value="10" min="1" max="50">
+                <input type="number" id="srcMaxResults" value="10" min="1" max="100">
             </div>
             <div class="form-actions">
                 <button class="btn-sm" onclick="closeSourceModal()">取消</button>
@@ -512,7 +527,7 @@
                 var missing = [];
                 if (!_apiKeysConfigured.baidu) missing.push('百度');
                 if (!_apiKeysConfigured.tavily) missing.push('Tavily');
-                warning = '<div class="api-key-warning">⚠️ ' + missing.join('、') + ' API Key 未配置，<a onclick="switchTabByName(\'settings\')">前往配置</a></div>';
+                warning = '<div class="api-key-warning">⚠️ ' + missing.join('、') + ' API Key 未配置，<a onclick="switchTabByName(\'settings\')">前往配置</a>。AI HOT 引擎免费免 Key 可直接使用。</div>';
             }
 
             if (!sources.length) {
@@ -523,8 +538,8 @@
             var srcOpts = '<option value="">全部来源</option>';
             var html = warning;
             html += '<table class="source-table"><thead><tr>' +
-                '<th>名称</th><th>分类</th><th>百度关键词</th><th>Tavily关键词</th>' +
-                '<th>引擎</th><th>启用</th><th>上次搜索</th><th>条目数</th><th>操作</th>' +
+                '<th>名称</th><th>分类</th><th>引擎</th>' +
+                '<th>启用</th><th>上次搜索</th><th>条目数</th><th>操作</th>' +
                 '</tr></thead><tbody>';
             sources.forEach(function(s) {
                 var engines = [];
@@ -538,8 +553,6 @@
                 html += '<tr>';
                 html += '<td><strong>' + escHtml(s.name) + '</strong></td>';
                 html += '<td>' + escHtml(s.category_name || '-') + '</td>';
-                html += '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(s.query_baidu) + '">' + escHtml(s.query_baidu || '-') + '</td>';
-                html += '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(s.query_tavily) + '">' + escHtml(s.query_tavily || '-') + '</td>';
                 html += '<td>' + engineHtml + '</td>';
                 html += '<td><button class="toggle-switch ' + (s.is_active ? 'on' : '') + '" onclick="toggleSource(' + s.id + ',' + (s.is_active ? 0 : 1) + ')"></button></td>';
                 html += '<td style="white-space:nowrap;">' + timeAgo(s.last_search_at) + '</td>';
@@ -567,9 +580,12 @@
             document.getElementById('srcName').value = '';
             document.getElementById('srcQueryBaidu').value = '';
             document.getElementById('srcQueryTavily').value = '';
+            document.getElementById('srcQueryAihot').value = '';
+            document.getElementById('srcAihotMode').value = 'selected';
             document.getElementById('srcCategory').value = '';
             document.getElementById('srcEngineBaidu').checked = true;
             document.getElementById('srcEngineTavily').checked = true;
+            document.getElementById('srcEngineAihot').checked = false;
             document.getElementById('srcBaiduRecency').value = 'week';
             document.getElementById('srcTavilyDays').value = '7';
             document.getElementById('srcMaxResults').value = '10';
@@ -591,11 +607,14 @@
             document.getElementById('srcName').value = s.name || '';
             document.getElementById('srcQueryBaidu').value = s.query_baidu || '';
             document.getElementById('srcQueryTavily').value = s.query_tavily || '';
+            document.getElementById('srcQueryAihot').value = s.query_aihot || '';
+            document.getElementById('srcAihotMode').value = s.aihot_mode || 'selected';
             document.getElementById('srcCategory').value = s.category_id || '';
             var engines = [];
             try { engines = JSON.parse(s.search_engines || '[]'); } catch(e) {}
             document.getElementById('srcEngineBaidu').checked = engines.indexOf('baidu') >= 0;
             document.getElementById('srcEngineTavily').checked = engines.indexOf('tavily') >= 0;
+            document.getElementById('srcEngineAihot').checked = engines.indexOf('aihot') >= 0;
             document.getElementById('srcBaiduRecency').value = s.baidu_recency || 'week';
             document.getElementById('srcTavilyDays').value = s.tavily_days || 7;
             document.getElementById('srcMaxResults').value = s.max_results || 10;
@@ -609,14 +628,17 @@
         var engines = [];
         if (document.getElementById('srcEngineBaidu').checked) engines.push('baidu');
         if (document.getElementById('srcEngineTavily').checked) engines.push('tavily');
+        if (document.getElementById('srcEngineAihot').checked) engines.push('aihot');
         var body = {
             name: name,
             query_baidu: document.getElementById('srcQueryBaidu').value.trim(),
             query_tavily: document.getElementById('srcQueryTavily').value.trim(),
+            query_aihot: document.getElementById('srcQueryAihot').value.trim(),
             category_id: document.getElementById('srcCategory').value || null,
             search_engines: JSON.stringify(engines),
             baidu_recency: document.getElementById('srcBaiduRecency').value,
             tavily_days: parseInt(document.getElementById('srcTavilyDays').value) || 7,
+            aihot_mode: document.getElementById('srcAihotMode').value,
             max_results: parseInt(document.getElementById('srcMaxResults').value) || 10,
         };
         try {

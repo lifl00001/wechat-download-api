@@ -271,6 +271,76 @@ def fetch_tavily(query: str, topic: str = "news", days: int = 7,
         return []
 
 
+def fetch_aihot(query: str = "", mode: str = "selected",
+                category: str = "", since_days: int = 7,
+                max_results: int = 30) -> List[Dict]:
+    """
+    调用 AI HOT 公开 REST API（免费匿名，无需 API Key）
+    https://aihot.virxact.com — AI 行业新闻聚合
+    返回标准化的新闻列表（含中文摘要）
+    """
+    _AIHOT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 aihot-skill/0.2.0")
+    _AIHOT_TIMEOUT = 30
+
+    try:
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        params = {
+            "mode": mode if mode in ("selected", "all") else "selected",
+            "take": min(max_results, 100),
+            "since": since,
+        }
+        if query:
+            params["q"] = query
+        if category and category in ("ai-models", "ai-products", "industry", "paper", "tip"):
+            params["category"] = category
+
+        # 使用独立 session，禁用系统代理避免 SSL 超时
+        sess = requests.Session()
+        sess.trust_env = False
+        resp = sess.get(
+            "https://aihot.virxact.com/api/public/items",
+            headers={"User-Agent": _AIHOT_UA},
+            params=params,
+            timeout=_AIHOT_TIMEOUT,
+        )
+
+        if resp.status_code == 429:
+            logger.warning("AI HOT rate limited (429), slowing down")
+            return []
+
+        data = resp.json()
+        items = data.get("items", [])
+
+        results = []
+        for item in items:
+            summary = item.get("summary", "") or ""
+            pub_at = item.get("publishedAt", "") or ""
+            # AI HOT summary 即为中文摘要，作为 full_text 使用
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "snippet": summary[:500],
+                "full_text": summary,
+                "published_date": pub_at[:10] if pub_at else "",
+                "author": item.get("source", ""),
+                "score": 0,
+            })
+
+        logger.info("AI HOT search '%s' mode=%s returned %d results",
+                    query[:30] if query else "(all)", mode, len(results))
+        return results
+
+    except requests.exceptions.Timeout:
+        logger.error("AI HOT API timeout")
+        return []
+    except Exception as e:
+        logger.error("AI HOT API error: %s", e)
+        return []
+
+
 # ── 搜索循环 ─────────────────────────────────────────────────
 
 def run_search_cycle():
@@ -309,6 +379,14 @@ def run_search_cycle():
                 if items:
                     saved += news_store.save_news_items(source_id, items, "tavily")
 
+        if "aihot" in engines:
+            query = source.get("query_aihot", "")
+            aihot_mode = source.get("aihot_mode", "selected")
+            # AI HOT 不强制要求 query，空 query = 拉全部
+            items = fetch_aihot(query=query, mode=aihot_mode, max_results=max_results)
+            if items:
+                saved += news_store.save_news_items(source_id, items, "aihot")
+
         total_saved += saved
         logger.info("Source '%s' (id=%d): saved %d items", name, source_id, saved)
 
@@ -343,6 +421,13 @@ def run_single_source_search(source_id: int) -> int:
             items = fetch_tavily(query, topic=topic, days=days, max_results=max_results)
             if items:
                 saved += news_store.save_news_items(source_id, items, "tavily")
+
+    if "aihot" in engines:
+        query = source.get("query_aihot", "")
+        aihot_mode = source.get("aihot_mode", "selected")
+        items = fetch_aihot(query=query, mode=aihot_mode, max_results=max_results)
+        if items:
+            saved += news_store.save_news_items(source_id, items, "aihot")
 
     return saved
 

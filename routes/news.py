@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from utils import news_store
-from utils.news_fetcher import news_searcher, run_single_source_search, fetch_baidu, fetch_tavily, fetch_single_item_content
+from utils.news_fetcher import news_searcher, run_single_source_search, fetch_baidu, fetch_tavily, fetch_aihot, fetch_single_item_content
 from utils.settings_manager import settings_manager
 
 logger = logging.getLogger(__name__)
@@ -29,11 +29,13 @@ class CreateSourceRequest(BaseModel):
     name: str = Field(..., description="搜索源名称", min_length=1, max_length=200)
     query_baidu: str = Field("", description="百度搜索关键词")
     query_tavily: str = Field("", description="Tavily 搜索关键词")
+    query_aihot: str = Field("", description="AI HOT 关键词（空=拉全部精选）")
     category_id: Optional[int] = Field(None, description="关联分类 ID")
     search_engines: str = Field('["baidu","tavily"]', description="启用的搜索引擎 JSON 数组")
     tavily_topic: str = Field("news", description="Tavily topic")
     tavily_days: int = Field(7, description="Tavily 时间范围（天）")
     baidu_recency: str = Field("week", description="百度时效过滤: week/month/semiyear/year")
+    aihot_mode: str = Field("selected", description="AI HOT 模式: selected/all")
     max_results: int = Field(10, description="每个引擎最大结果数")
 
 
@@ -41,11 +43,13 @@ class UpdateSourceRequest(BaseModel):
     name: Optional[str] = None
     query_baidu: Optional[str] = None
     query_tavily: Optional[str] = None
+    query_aihot: Optional[str] = None
     category_id: Optional[int] = None
     search_engines: Optional[str] = None
     tavily_topic: Optional[str] = None
     tavily_days: Optional[int] = None
     baidu_recency: Optional[str] = None
+    aihot_mode: Optional[str] = None
     max_results: Optional[int] = None
     is_active: Optional[int] = None
 
@@ -58,6 +62,7 @@ class OneTimeSearchRequest(BaseModel):
     baidu_recency: str = Field("week", description="百度时效过滤")
     tavily_topic: str = Field("news", description="Tavily topic")
     tavily_days: int = Field(7, description="Tavily 时间范围（天）")
+    aihot_mode: str = Field("selected", description="AI HOT 模式: selected/all")
 
 
 # ── 搜索源 CRUD ──────────────────────────────────────────────
@@ -70,11 +75,13 @@ async def create_source(req: CreateSourceRequest):
             name=req.name,
             query_baidu=req.query_baidu,
             query_tavily=req.query_tavily,
+            query_aihot=req.query_aihot,
             category_id=req.category_id,
             search_engines=req.search_engines,
             tavily_topic=req.tavily_topic,
             tavily_days=req.tavily_days,
             baidu_recency=req.baidu_recency,
+            aihot_mode=req.aihot_mode,
             max_results=req.max_results,
         )
         return {"success": True, "id": source_id, "message": f"搜索源 '{req.name}' 创建成功"}
@@ -171,6 +178,11 @@ async def one_time_search(req: OneTimeSearchRequest):
                                  days=req.tavily_days, max_results=req.max_results)
             for item in items:
                 item["source_engine"] = "tavily"
+            results.extend(items)
+        elif engine == "aihot":
+            items = fetch_aihot(query=req.query, mode=req.aihot_mode, max_results=req.max_results)
+            for item in items:
+                item["source_engine"] = "aihot"
             results.extend(items)
 
     return {

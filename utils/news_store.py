@@ -32,6 +32,18 @@ def _safe_create_index(conn, index_name: str, table_name: str, columns: str):
     db_manager.commit(conn)
 
 
+def _safe_add_column(conn, table: str, column: str, definition: str):
+    """安全添加列（幂等，已存在则忽略）"""
+    try:
+        if db_manager.USE_MYSQL:
+            db_manager.execute(conn, f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        else:
+            db_manager.execute(conn, f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        db_manager.commit(conn)
+    except Exception:
+        pass  # 列已存在，忽略
+
+
 def init_news_db():
     """建表（幂等，兼容 SQLite 和 MySQL）"""
     conn = db_manager.get_conn()
@@ -43,12 +55,14 @@ def init_news_db():
                     name            VARCHAR(200) NOT NULL UNIQUE,
                     query_baidu     TEXT NOT NULL,
                     query_tavily    TEXT NOT NULL,
+                    query_aihot     VARCHAR(2000) NOT NULL DEFAULT '',
                     category_id     INT DEFAULT NULL,
                     search_engines  VARCHAR(200) NOT NULL DEFAULT '["baidu","tavily"]',
                     tavily_topic    VARCHAR(50) NOT NULL DEFAULT 'news',
                     tavily_days     INT NOT NULL DEFAULT 7,
                     baidu_recency   VARCHAR(50) NOT NULL DEFAULT 'week',
                     max_results     INT NOT NULL DEFAULT 10,
+                    aihot_mode      VARCHAR(20) NOT NULL DEFAULT 'selected',
                     is_active       INT NOT NULL DEFAULT 1,
                     last_search_at  INT NOT NULL DEFAULT 0,
                     created_at      INT NOT NULL,
@@ -83,12 +97,14 @@ def init_news_db():
                     name            TEXT NOT NULL UNIQUE,
                     query_baidu     TEXT NOT NULL DEFAULT '',
                     query_tavily    TEXT NOT NULL DEFAULT '',
+                    query_aihot     TEXT NOT NULL DEFAULT '',
                     category_id     INTEGER DEFAULT NULL,
                     search_engines  TEXT NOT NULL DEFAULT '["baidu","tavily"]',
                     tavily_topic    TEXT NOT NULL DEFAULT 'news',
                     tavily_days     INTEGER NOT NULL DEFAULT 7,
                     baidu_recency   TEXT NOT NULL DEFAULT 'week',
                     max_results     INTEGER NOT NULL DEFAULT 10,
+                    aihot_mode      TEXT NOT NULL DEFAULT 'selected',
                     is_active       INTEGER NOT NULL DEFAULT 1,
                     last_search_at  INTEGER NOT NULL DEFAULT 0,
                     created_at      INTEGER NOT NULL,
@@ -123,6 +139,13 @@ def init_news_db():
         _safe_create_index(conn, "idx_news_items_category_date", "news_items", "category_id, published_ts DESC")
         _safe_create_index(conn, "idx_news_sources_category", "news_sources", "category_id")
 
+        # 增量添加 AI HOT 字段（幂等，已存在则忽略）
+        if db_manager.USE_MYSQL:
+            _safe_add_column(conn, "news_sources", "query_aihot", "VARCHAR(2000) NOT NULL DEFAULT ''")
+        else:
+            _safe_add_column(conn, "news_sources", "query_aihot", "TEXT NOT NULL DEFAULT ''")
+        _safe_add_column(conn, "news_sources", "aihot_mode", "VARCHAR(20) NOT NULL DEFAULT 'selected'")
+
         logger.info("News tables initialized")
     finally:
         conn.close()
@@ -154,7 +177,8 @@ def add_news_source(name: str, query_baidu: str = "", query_tavily: str = "",
                     category_id: Optional[int] = None,
                     search_engines: str = '["baidu","tavily"]',
                     tavily_topic: str = "news", tavily_days: int = 7,
-                    baidu_recency: str = "week", max_results: int = 10) -> int:
+                    baidu_recency: str = "week", max_results: int = 10,
+                    query_aihot: str = "", aihot_mode: str = "selected") -> int:
     """创建搜索源，返回新 ID"""
     conn = db_manager.get_conn()
     try:
@@ -163,10 +187,12 @@ def add_news_source(name: str, query_baidu: str = "", query_tavily: str = "",
             INSERT INTO news_sources
                 (name, query_baidu, query_tavily, category_id, search_engines,
                  tavily_topic, tavily_days, baidu_recency, max_results,
+                 query_aihot, aihot_mode,
                  is_active, last_search_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
         """, (name, query_baidu, query_tavily, category_id, search_engines,
-              tavily_topic, tavily_days, baidu_recency, max_results, now))
+              tavily_topic, tavily_days, baidu_recency, max_results,
+              query_aihot, aihot_mode, now))
         db_manager.commit(conn)
         new_id = db_manager.lastrowid(cursor)
         cursor.close()
@@ -195,7 +221,8 @@ def update_news_source(source_id: int, **kwargs) -> bool:
         return False
     allowed = {"name", "query_baidu", "query_tavily", "category_id",
                "search_engines", "tavily_topic", "tavily_days",
-               "baidu_recency", "max_results", "is_active", "last_search_at"}
+               "baidu_recency", "max_results", "is_active", "last_search_at",
+               "query_aihot", "aihot_mode"}
     fields = []
     values = []
     for k, v in kwargs.items():
