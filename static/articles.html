@@ -693,18 +693,19 @@ body.has-top-nav .layout {
                 var data = await res.json();
                 if (!data.success) throw new Error(data.detail || data.error || '加载失败');
 
-                var pg = data.pagination || {};
-                state.total = pg.total || 0;
-                state.totalPages = pg.total_pages || 0;
+                var result = data.data || {};
+                var articles = result.articles || [];
+                state.total = result.total || 0;
+                state.totalPages = Math.ceil(state.total / result.page_size) || 0;
                 summary.innerHTML = '<span>共 ' + state.total + ' 篇文章</span>';
 
-                if (!data.data || data.data.length === 0) {
+                if (articles.length === 0) {
                     renderEmptyState(list, {icon: '📚', title: '暂无文章', desc: '订阅轮询或历史文章获取成功后会出现在这里', actionText: '去订阅', actionHref: '/rss.html'});
                     renderPager();
                     return;
                 }
 
-                list.innerHTML = data.data.map(renderArticle).join('');
+                list.innerHTML = articles.map(renderArticle).join('');
                 renderPager();
             } catch (e) {
                 summary.textContent = '加载失败';
