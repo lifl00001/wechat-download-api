@@ -135,7 +135,7 @@ def init_db():
                 fakeid      VARCHAR(200) NOT NULL,
                 aid         VARCHAR(200) NOT NULL DEFAULT '',
                 title       VARCHAR(500) NOT NULL DEFAULT '',
-                link        VARCHAR(1000) NOT NULL DEFAULT '',
+                link        VARCHAR(500) NOT NULL DEFAULT '',
                 digest      VARCHAR(2000) NOT NULL DEFAULT '',
                 cover       VARCHAR(500) NOT NULL DEFAULT '',
                 author      VARCHAR(200) NOT NULL DEFAULT '',
@@ -144,8 +144,7 @@ def init_db():
                 publish_time INT NOT NULL DEFAULT 0,
                 fetched_at  INT NOT NULL,
                 source      VARCHAR(50) NOT NULL DEFAULT 'poll',
-                UNIQUE(fakeid, link),
-                FOREIGN KEY (fakeid) REFERENCES subscriptions(fakeid) ON DELETE CASCADE
+                UNIQUE(fakeid, link)
             );
         """)
     else:
