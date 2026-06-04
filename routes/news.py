@@ -235,8 +235,8 @@ async def list_items(
 
 @router.get("/items/{item_id}", summary="新闻详情")
 async def get_item(item_id: int):
-    """获取单条新闻详情"""
-    item = news_store.get_news_item(item_id)
+    """获取单条新闻详情（包含全文）"""
+    item = news_store.get_news_item(item_id, include_full_text=True)
     if not item:
         raise HTTPException(status_code=404, detail="新闻不存在")
     return item
@@ -245,7 +245,7 @@ async def get_item(item_id: int):
 @router.post("/items/{item_id}/fetch-content", summary="抓取新闻全文")
 async def fetch_item_content(item_id: int):
     """抓取单条新闻的原文全文并更新数据库"""
-    item = news_store.get_news_item(item_id)
+    item = news_store.get_news_item(item_id, include_full_text=False)
     if not item:
         raise HTTPException(status_code=404, detail="新闻不存在")
 

@@ -137,6 +137,9 @@ def init_news_db():
         # 创建索引
         _safe_create_index(conn, "idx_news_items_source", "news_items", "source_id, published_ts DESC")
         _safe_create_index(conn, "idx_news_items_category_date", "news_items", "category_id, published_ts DESC")
+        _safe_create_index(conn, "idx_news_items_engine", "news_items", "source_engine")
+        _safe_create_index(conn, "idx_news_items_published_date", "news_items", "published_date")
+        _safe_create_index(conn, "idx_news_items_fetched", "news_items", "fetched_at DESC")
         _safe_create_index(conn, "idx_news_sources_category", "news_sources", "category_id")
 
         # 增量添加 AI HOT 字段（幂等，已存在则忽略）
@@ -418,8 +421,13 @@ def get_news_items(category_id: Optional[int] = None,
 
     conn = db_manager.get_conn()
     try:
+        # 默认不返回 full_text 以提升性能，需要时单独查询
         rows = db_manager.fetchall(conn, f"""
-            SELECT ni.*, ns.name AS source_name, c.name AS category_name
+            SELECT ni.id, ni.source_id, ni.title, ni.url, ni.snippet,
+                   ni.source_engine, ni.source_name, ni.author,
+                   ni.published_date, ni.published_ts, ni.relevance_score,
+                   ni.category_id, ni.url_hash, ni.fetched_at,
+                   ns.name AS source_name, c.name AS category_name
             FROM news_items ni
             LEFT JOIN news_sources ns ON ni.source_id = ns.id
             LEFT JOIN categories c ON ni.category_id = c.id
@@ -470,17 +478,32 @@ def count_news_items(category_id: Optional[int] = None,
         conn.close()
 
 
-def get_news_item(item_id: int) -> Optional[Dict]:
+def get_news_item(item_id: int, include_full_text: bool = False) -> Optional[Dict]:
     """获取单条新闻详情"""
     conn = db_manager.get_conn()
     try:
-        return db_manager.fetchone(conn, """
-            SELECT ni.*, ns.name AS source_name, c.name AS category_name
-            FROM news_items ni
-            LEFT JOIN news_sources ns ON ni.source_id = ns.id
-            LEFT JOIN categories c ON ni.category_id = c.id
-            WHERE ni.id = ?
-        """, (item_id,))
+        if include_full_text:
+            # 需要全文时才查询 full_text
+            return db_manager.fetchone(conn, """
+                SELECT ni.*, ns.name AS source_name, c.name AS category_name
+                FROM news_items ni
+                LEFT JOIN news_sources ns ON ni.source_id = ns.id
+                LEFT JOIN categories c ON ni.category_id = c.id
+                WHERE ni.id = ?
+            """, (item_id,))
+        else:
+            # 默认不返回 full_text
+            return db_manager.fetchone(conn, """
+                SELECT ni.id, ni.source_id, ni.title, ni.url, ni.snippet,
+                       ni.source_engine, ni.source_name, ni.author,
+                       ni.published_date, ni.published_ts, ni.relevance_score,
+                       ni.category_id, ni.url_hash, ni.fetched_at,
+                       ns.name AS source_name, c.name AS category_name
+                FROM news_items ni
+                LEFT JOIN news_sources ns ON ni.source_id = ns.id
+                LEFT JOIN categories c ON ni.category_id = c.id
+                WHERE ni.id = ?
+            """, (item_id,))
     finally:
         conn.close()
 
@@ -503,40 +526,69 @@ def update_news_item_full_text(item_id: int, full_text: str) -> bool:
 def get_daily_report_data(category_id: Optional[int] = None,
                           date: Optional[str] = None) -> List[Dict]:
     """
-    日报数据：按 url_hash GROUP BY 去重（跨引擎），
-    取 full_text 最长的一条（优先 Tavily）
+    日报数据：按 url_hash 去重（跨引擎），
+    优先取 Tavily 引擎数据（通常有更完整的全文）
     """
     conditions = []
     params = []
     if category_id is not None:
-        conditions.append("category_id = ?")
+        conditions.append("ni.category_id = ?")
         params.append(category_id)
     if date:
-        conditions.append("published_date LIKE ?")
+        conditions.append("ni.published_date LIKE ?")
         params.append(f"{date}%")
 
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-    if db_manager.USE_MYSQL:
-        order_len = "CHAR_LENGTH(full_text)"
-    else:
-        order_len = "LENGTH(full_text)"
-
     conn = db_manager.get_conn()
     try:
-        rows = db_manager.fetchall(conn, f"""
-            SELECT ni.*, c.name AS category_name
-            FROM news_items ni
-            LEFT JOIN categories c ON ni.category_id = c.id
-            INNER JOIN (
-                SELECT url_hash, MAX({order_len}) AS max_len
-                FROM news_items
+        # 使用 ROW_NUMBER() 去重，优先 Tavily 引擎，然后按相关度和时间排序
+        if db_manager.USE_MYSQL:
+            # MySQL 8.0+ 支持窗口函数
+            rows = db_manager.fetchall(conn, f"""
+                SELECT * FROM (
+                    SELECT
+                        ni.id, ni.source_id, ni.title, ni.url, ni.snippet,
+                        ni.source_engine, ni.source_name, ni.author,
+                        ni.published_date, ni.published_ts, ni.relevance_score,
+                        ni.category_id, ni.url_hash, ni.fetched_at,
+                        c.name AS category_name,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ni.url_hash
+                            ORDER BY
+                                CASE WHEN ni.source_engine = 'tavily' THEN 0 ELSE 1 END,
+                                ni.relevance_score DESC,
+                                ni.published_ts DESC
+                        ) AS rn
+                    FROM news_items ni
+                    LEFT JOIN categories c ON ni.category_id = c.id
+                    {where}
+                ) ranked
+                WHERE rn = 1
+                ORDER BY relevance_score DESC, published_ts DESC
+            """, tuple(params))
+        else:
+            # SQLite 不支持窗口函数，使用子查询去重
+            rows = db_manager.fetchall(conn, f"""
+                SELECT ni.id, ni.source_id, ni.title, ni.url, ni.snippet,
+                       ni.source_engine, ni.source_name, ni.author,
+                       ni.published_date, ni.published_ts, ni.relevance_score,
+                       ni.category_id, ni.url_hash, ni.fetched_at,
+                       c.name AS category_name
+                FROM news_items ni
+                LEFT JOIN categories c ON ni.category_id = c.id
                 {where}
-                GROUP BY url_hash
-            ) dedup ON ni.url_hash = dedup.url_hash AND {order_len} = dedup.max_len
-            {where.replace('news_items.', 'ni.').replace('WHERE', 'AND') if conditions else ''}
-            ORDER BY ni.relevance_score DESC, ni.published_ts DESC
-        """, tuple(params + params))
+                AND ni.id = (
+                    SELECT id FROM news_items ni2
+                    WHERE ni2.url_hash = ni.url_hash
+                    ORDER BY
+                        CASE WHEN ni2.source_engine = 'tavily' THEN 0 ELSE 1 END,
+                        ni2.relevance_score DESC,
+                        ni2.published_ts DESC
+                    LIMIT 1
+                )
+                ORDER BY ni.relevance_score DESC, ni.published_ts DESC
+            """, tuple(params))
         return rows
     finally:
         conn.close()
