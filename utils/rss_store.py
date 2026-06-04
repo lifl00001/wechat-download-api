@@ -17,38 +17,75 @@ from utils import db_manager
 logger = logging.getLogger(__name__)
 
 
+def _safe_create_index(conn, index_name: str, table_name: str, columns: str):
+    """安全创建索引（兼容 SQLite 和 MySQL）"""
+    if db_manager.USE_MYSQL:
+        # MySQL: 用 ALTER TABLE ADD INDEX IF NOT EXISTS (8.0+) 或先检查再创建
+        try:
+            db_manager.execute(conn,
+                f"ALTER TABLE {table_name} ADD INDEX {index_name} ({columns})")
+        except Exception:
+            pass  # 索引已存在，忽略
+    else:
+        # SQLite: 支持 CREATE INDEX IF NOT EXISTS
+        db_manager.execute(conn,
+            f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({columns})")
+    db_manager.commit(conn)
+
+
 def init_db():
-    """建表（幂等）"""
+    """建表（幂等，兼容 SQLite 和 MySQL）"""
     conn = db_manager.get_conn()
 
-    # 先创建不依赖其他表的基础表
-    db_manager.adapt_executescript(conn, """
-        -- 分类表（先创建，因为 subscriptions 依赖它）
-        CREATE TABLE IF NOT EXISTS categories (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT NOT NULL UNIQUE,
-            description TEXT NOT NULL DEFAULT '',
-            color       TEXT NOT NULL DEFAULT 'blue',
-            sort_order  INTEGER NOT NULL DEFAULT 0,
-            created_at  INTEGER NOT NULL
-        );
+    if db_manager.USE_MYSQL:
+        # MySQL: TEXT 不能有 DEFAULT，使用 VARCHAR(500) 或去掉 DEFAULT
+        db_manager.adapt_executescript(conn, """
+            CREATE TABLE IF NOT EXISTS categories (
+                id          INT AUTO_INCREMENT PRIMARY KEY,
+                name        VARCHAR(200) NOT NULL UNIQUE,
+                description VARCHAR(500) NOT NULL DEFAULT '',
+                color       VARCHAR(50) NOT NULL DEFAULT 'blue',
+                sort_order  INT NOT NULL DEFAULT 0,
+                created_at  INT NOT NULL
+            );
 
-        -- 黑名单表
-        CREATE TABLE IF NOT EXISTS fakeid_blacklist (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            fakeid      TEXT NOT NULL UNIQUE,
-            nickname    TEXT NOT NULL DEFAULT '',
-            reason      TEXT NOT NULL DEFAULT 'manual',
-            verification_count INTEGER NOT NULL DEFAULT 0,
-            is_active   INTEGER NOT NULL DEFAULT 1,
-            blacklisted_at INTEGER NOT NULL,
-            unblacklisted_at INTEGER DEFAULT NULL,
-            note        TEXT NOT NULL DEFAULT ''
-        );
+            CREATE TABLE IF NOT EXISTS fakeid_blacklist (
+                id          INT AUTO_INCREMENT PRIMARY KEY,
+                fakeid      VARCHAR(200) NOT NULL UNIQUE,
+                nickname    VARCHAR(200) NOT NULL DEFAULT '',
+                reason      VARCHAR(100) NOT NULL DEFAULT 'manual',
+                verification_count INT NOT NULL DEFAULT 0,
+                is_active   INT NOT NULL DEFAULT 1,
+                blacklisted_at INT NOT NULL,
+                unblacklisted_at INT DEFAULT NULL,
+                note        VARCHAR(500) NOT NULL DEFAULT ''
+            );
+        """)
+    else:
+        db_manager.adapt_executescript(conn, """
+            CREATE TABLE IF NOT EXISTS categories (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                color       TEXT NOT NULL DEFAULT 'blue',
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                created_at  INTEGER NOT NULL
+            );
 
-        CREATE INDEX IF NOT EXISTS idx_blacklist_active ON fakeid_blacklist(is_active);
-    """)
+            CREATE TABLE IF NOT EXISTS fakeid_blacklist (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                fakeid      TEXT NOT NULL UNIQUE,
+                nickname    TEXT NOT NULL DEFAULT '',
+                reason      TEXT NOT NULL DEFAULT 'manual',
+                verification_count INTEGER NOT NULL DEFAULT 0,
+                is_active   INTEGER NOT NULL DEFAULT 1,
+                blacklisted_at INTEGER NOT NULL,
+                unblacklisted_at INTEGER DEFAULT NULL,
+                note        TEXT NOT NULL DEFAULT ''
+            );
+        """)
     db_manager.commit(conn)
+    _safe_create_index(conn, "idx_blacklist_active", "fakeid_blacklist", "is_active")
 
     # 检查 subscriptions 表是否存在
     table_exists = db_manager.check_table_exists(conn, "subscriptions")
@@ -56,60 +93,98 @@ def init_db():
     if table_exists:
         # 表已存在，检查是否有 category_id 列
         if not db_manager.check_column_exists(conn, "subscriptions", "category_id"):
-            # 添加 category_id 列
-            cursor = db_manager.execute(conn, "ALTER TABLE subscriptions ADD COLUMN category_id INTEGER DEFAULT NULL")
-            cursor.close()
+            db_manager.add_column(conn, "subscriptions",
+                                  "category_id INTEGER DEFAULT NULL")
             db_manager.commit(conn)
             logger.info("Added category_id column to subscriptions table")
     else:
         # 表不存在，创建新表
-        db_manager.adapt_executescript(conn, """
-            CREATE TABLE subscriptions (
-                fakeid      TEXT PRIMARY KEY,
-                nickname    TEXT NOT NULL DEFAULT '',
-                alias       TEXT NOT NULL DEFAULT '',
-                head_img    TEXT NOT NULL DEFAULT '',
-                category_id INTEGER DEFAULT NULL,
-                created_at  INTEGER NOT NULL,
-                last_poll   INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
-            );
-        """)
+        if db_manager.USE_MYSQL:
+            db_manager.adapt_executescript(conn, """
+                CREATE TABLE subscriptions (
+                    fakeid      VARCHAR(200) PRIMARY KEY,
+                    nickname    VARCHAR(200) NOT NULL DEFAULT '',
+                    alias       VARCHAR(200) NOT NULL DEFAULT '',
+                    head_img    VARCHAR(500) NOT NULL DEFAULT '',
+                    category_id INT DEFAULT NULL,
+                    created_at  INT NOT NULL,
+                    last_poll   INT NOT NULL DEFAULT 0,
+                    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+                );
+            """)
+        else:
+            db_manager.adapt_executescript(conn, """
+                CREATE TABLE subscriptions (
+                    fakeid      TEXT PRIMARY KEY,
+                    nickname    TEXT NOT NULL DEFAULT '',
+                    alias       TEXT NOT NULL DEFAULT '',
+                    head_img    TEXT NOT NULL DEFAULT '',
+                    category_id INTEGER DEFAULT NULL,
+                    created_at  INTEGER NOT NULL,
+                    last_poll   INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+                );
+            """)
         db_manager.commit(conn)
 
     # 创建 articles 表
-    db_manager.adapt_executescript(conn, """
-        CREATE TABLE IF NOT EXISTS articles (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            fakeid      TEXT NOT NULL,
-            aid         TEXT NOT NULL DEFAULT '',
-            title       TEXT NOT NULL DEFAULT '',
-            link        TEXT NOT NULL DEFAULT '',
-            digest      TEXT NOT NULL DEFAULT '',
-            cover       TEXT NOT NULL DEFAULT '',
-            author      TEXT NOT NULL DEFAULT '',
-            content     TEXT NOT NULL DEFAULT '',
-            plain_content TEXT NOT NULL DEFAULT '',
-            publish_time INTEGER NOT NULL DEFAULT 0,
-            fetched_at  INTEGER NOT NULL,
-            UNIQUE(fakeid, link),
-            FOREIGN KEY (fakeid) REFERENCES subscriptions(fakeid) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_articles_fakeid_time
-            ON articles(fakeid, publish_time DESC);
-        CREATE INDEX IF NOT EXISTS idx_subscriptions_category ON subscriptions(category_id);
-    """)
+    if db_manager.USE_MYSQL:
+        db_manager.adapt_executescript(conn, """
+            CREATE TABLE IF NOT EXISTS articles (
+                id          INT AUTO_INCREMENT PRIMARY KEY,
+                fakeid      VARCHAR(200) NOT NULL,
+                aid         VARCHAR(200) NOT NULL DEFAULT '',
+                title       VARCHAR(500) NOT NULL DEFAULT '',
+                link        VARCHAR(1000) NOT NULL DEFAULT '',
+                digest      VARCHAR(2000) NOT NULL DEFAULT '',
+                cover       VARCHAR(500) NOT NULL DEFAULT '',
+                author      VARCHAR(200) NOT NULL DEFAULT '',
+                content     MEDIUMTEXT NOT NULL,
+                plain_content MEDIUMTEXT NOT NULL,
+                publish_time INT NOT NULL DEFAULT 0,
+                fetched_at  INT NOT NULL,
+                source      VARCHAR(50) NOT NULL DEFAULT 'poll',
+                UNIQUE(fakeid, link),
+                FOREIGN KEY (fakeid) REFERENCES subscriptions(fakeid) ON DELETE CASCADE
+            );
+        """)
+    else:
+        db_manager.adapt_executescript(conn, """
+            CREATE TABLE IF NOT EXISTS articles (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                fakeid      TEXT NOT NULL,
+                aid         TEXT NOT NULL DEFAULT '',
+                title       TEXT NOT NULL DEFAULT '',
+                link        TEXT NOT NULL DEFAULT '',
+                digest      TEXT NOT NULL DEFAULT '',
+                cover       TEXT NOT NULL DEFAULT '',
+                author      TEXT NOT NULL DEFAULT '',
+                content     TEXT NOT NULL DEFAULT '',
+                plain_content TEXT NOT NULL DEFAULT '',
+                publish_time INTEGER NOT NULL DEFAULT 0,
+                fetched_at  INTEGER NOT NULL,
+                source      TEXT NOT NULL DEFAULT 'poll',
+                UNIQUE(fakeid, link),
+                FOREIGN KEY (fakeid) REFERENCES subscriptions(fakeid) ON DELETE CASCADE
+            );
+        """)
     db_manager.commit(conn)
 
+    _safe_create_index(conn, "idx_articles_fakeid_time",
+                       "articles", "fakeid, publish_time DESC")
+    _safe_create_index(conn, "idx_subscriptions_category",
+                       "subscriptions", "category_id")
+
     # 检查并添加 source 字段（用于区分轮询器文章和历史文章）
-    if not db_manager.check_column_exists(conn, "articles", "source"):
-        logger.info("Adding source column to articles table")
-        cursor = db_manager.execute(conn, "ALTER TABLE articles ADD COLUMN source TEXT NOT NULL DEFAULT 'poll'")
-        cursor.close()
-        db_manager.execute(conn, "CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)")
-        db_manager.commit(conn)
-        logger.info("Added source column and index to articles table")
+    if db_manager.check_table_exists(conn, "articles"):
+        if not db_manager.check_column_exists(conn, "articles", "source"):
+            logger.info("Adding source column to articles table")
+            db_manager.add_column(conn, "articles",
+                                  "source VARCHAR(50) NOT NULL DEFAULT 'poll'")
+            db_manager.commit(conn)
+            _safe_create_index(conn, "idx_articles_source",
+                               "articles", "source")
+            logger.info("Added source column and index to articles table")
 
     db_manager.close_conn(conn)
     logger.info("RSS database initialized")
