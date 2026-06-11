@@ -848,9 +848,17 @@ def list_cached_articles(limit: int = 20, offset: int = 0,
             conditions.append("(a.title LIKE ? OR a.digest LIKE ? OR a.author LIKE ? OR a.plain_content LIKE ?)")
             params.extend([kw, kw, kw, kw])
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        # 列表只查展示用列：不 SELECT content / plain_content 全文，
+        # 正文字数在 SQL 端用 CHAR_LENGTH/LENGTH 计算（plain_content_length），
+        # 避免把大段 MEDIUMTEXT 经网络回传再由 pymysql 解码（~956KB → 1.5s 的主因）。
+        len_expr = "CHAR_LENGTH(a.plain_content)" if db_manager.USE_MYSQL else "LENGTH(a.plain_content)"
         return db_manager.fetchall(
             conn,
-            f"SELECT a.*, s.nickname FROM articles a LEFT JOIN subscriptions s ON a.fakeid = s.fakeid{where} ORDER BY a.publish_time DESC LIMIT ? OFFSET ?",
+            f"SELECT a.id, a.fakeid, a.aid, a.title, a.link, a.digest, a.cover, "
+            f"a.author, a.publish_time, a.fetched_at, a.source, "
+            f"{len_expr} AS plain_content_length, s.nickname "
+            f"FROM articles a LEFT JOIN subscriptions s ON a.fakeid = s.fakeid{where} "
+            f"ORDER BY a.publish_time DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
         )
     finally:

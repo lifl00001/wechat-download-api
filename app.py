@@ -76,6 +76,10 @@ async def lifespan(app: FastAPI):
     await login_reminder.stop()
     await rss_poller.stop()
 
+    # 关闭 MySQL 连接池（SQLite 模式下为空操作）
+    from utils import db_manager
+    db_manager.close_pool()
+
 
 app = FastAPI(
     title="WeChat Download API",

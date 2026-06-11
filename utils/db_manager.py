@@ -34,6 +34,8 @@ SQLITE_DB_PATH = Path(os.getenv("RSS_DB_PATH", str(_default_db)))
 # 懒加载 MySQL 模块
 _pymysql = None
 _DictCursor = None
+# MySQL 连接池（USE_MYSQL 时懒初始化，进程内复用连接，避免每次查询都新建 TCP+握手）
+_mysql_pool = None
 
 # 统一 IntegrityError
 IntegrityError = (sqlite3.IntegrityError,)
@@ -109,28 +111,73 @@ class _MySQLConnectionWrapper:
         return self._conn.cursor()
 
 
+def _get_mysql_pool():
+    """
+    懒初始化 MySQL 连接池（进程内单例）。
+    连接在池中复用，避免每次查询都付出 TCP 握手 + MySQL 认证的往返开销
+    （对公网/云 MySQL，这部分开销可达 ~100ms/次）。
+
+    - mincached=2:   启动即建立 2 个常驻连接
+    - maxcached=10:  空闲连接上限（按需扩缩）
+    - maxshared=0:   每个线程独占连接，避免共享带来的并发问题
+    - maxconnections=20: 总连接上限（超出时阻塞等待，而不是报错）
+    - blocking=True: 池满时等待，不抛异常
+    - ping=1:        取出连接前 ping 一次，自动剔除/重建已失效(如被 wait_timeout 关闭)的连接
+    """
+    global _mysql_pool
+    if _mysql_pool is None:
+        _load_mysql()
+        from dbutils.pooled_db import PooledDB
+        _mysql_pool = PooledDB(
+            creator=_pymysql,
+            mincached=2,
+            maxcached=10,
+            maxshared=0,
+            maxconnections=20,
+            blocking=True,
+            ping=1,
+            host=DB_HOST,
+            port=DB_PORT,
+            database=DB_DATABASE,
+            user=DB_USERNAME,
+            password=DB_PASSWORD,
+            charset="utf8mb4",
+            cursorclass=_DictCursor,
+            autocommit=False,
+        )
+        logger.info("MySQL connection pool initialized (mincached=2, maxconnections=20)")
+    return _mysql_pool
+
+
 def _get_mysql_conn():
-    """获取 MySQL 连接"""
-    _load_mysql()
-    raw_conn = _pymysql.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        database=DB_DATABASE,
-        user=DB_USERNAME,
-        password=DB_PASSWORD,
-        charset="utf8mb4",
-        cursorclass=_DictCursor,
-        autocommit=False,
-    )
+    """从连接池获取一个 MySQL 连接（用完 close_conn 时归还到池，而非真正关闭）"""
+    pool = _get_mysql_pool()
+    raw_conn = pool.connection()
     return _MySQLConnectionWrapper(raw_conn)
 
 
 def close_conn(conn):
-    """安全关闭连接"""
+    """
+    归还连接。
+    MySQL 模式下：连接归还到池（不真正关闭），下次 get_conn() 可复用。
+    SQLite 模式下：真正关闭。
+    """
     try:
         conn.close()
     except Exception:
         pass
+
+
+def close_pool():
+    """关闭连接池（进程退出时调用，释放所有连接）"""
+    global _mysql_pool
+    if _mysql_pool is not None:
+        try:
+            _mysql_pool.close()
+            logger.info("MySQL connection pool closed")
+        except Exception as e:
+            logger.warning("Error closing MySQL pool: %s", e)
+        _mysql_pool = None
 
 
 def row_to_dict(row: Any) -> Dict:

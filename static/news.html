@@ -981,15 +981,12 @@
                 if (item.snippet) {
                     html += '<div class="news-card-snippet" id="snippet-' + item.id + '">' + escHtml(item.snippet.substring(0, 200)) + '</div>';
                 }
-                html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">';
                 if (hasFull) {
+                    html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">';
                     html += '<button class="btn-sm" onclick="toggleFull(' + item.id + ')" id="toggle-btn-' + item.id + '">展开全文 (' + item.full_text.length + '字)</button>';
                     html += '<div class="news-card-full" id="full-' + item.id + '" style="display:none;">' + escHtml(item.full_text.substring(0, 5000)) + (item.full_text.length > 5000 ? '\n\n... (全文共 ' + item.full_text.length + ' 字)' : '') + '</div>';
-                } else {
-                    html += '<button class="btn-sm btn-success" onclick="fetchItemContent(' + item.id + ')" id="fetch-btn-' + item.id + '">抓取全文</button>';
-                    html += '<div class="news-card-full" id="full-' + item.id + '" style="display:none;"></div>';
+                    html += '</div>';
                 }
-                html += '</div>';
                 html += '</div>';
             });
             html += '</div>';
@@ -1009,30 +1006,6 @@
         } else {
             full.style.display = 'none';
             btn.textContent = '展开全文';
-        }
-    }
-
-    async function fetchItemContent(id) {
-        var btn = document.getElementById('fetch-btn-' + id);
-        if (!btn) return;
-        btn.disabled = true;
-        btn.textContent = '抓取中...';
-        try {
-            var res = await fetch('/api/news/items/' + id + '/fetch-content', { method: 'POST' });
-            var d = await res.json();
-            if (d.success) {
-                showToastSuccess('全文抓取成功（' + d.content_length + ' 字）');
-                // 重新加载列表以显示全文
-                loadItems();
-            } else {
-                showToastError(d.detail || '抓取失败');
-                btn.disabled = false;
-                btn.textContent = '抓取全文';
-            }
-        } catch (e) {
-            showToastError('抓取失败: ' + e.message);
-            btn.disabled = false;
-            btn.textContent = '抓取全文';
         }
     }
 
