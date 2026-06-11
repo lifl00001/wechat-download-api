@@ -266,6 +266,31 @@ async def update_settings(req: SettingsUpdateRequest):
     return {"success": True, "message": "配置已更新"}
 
 
+@router.post("/proxy/refresh", summary="手动刷新代理池")
+async def refresh_proxy():
+    """手动触发代理池刷新（动态模式拉取新代理，静态模式重新加载配置）"""
+    from utils.proxy_pool import proxy_pool
+    mode = proxy_pool._mode
+    if mode == "dynamic":
+        result = proxy_pool.refresh_dynamic()
+        return {
+            "success": result.get("success", False),
+            "mode": "dynamic",
+            "count": result.get("count", 0),
+            "last_error": result.get("last_error"),
+            "message": f"动态代理刷新完成，当前 {result.get('count', 0)} 个可用" if result.get("success") else f"刷新失败: {result.get('last_error', '未知错误')}",
+        }
+    else:
+        proxy_pool.reload()
+        count = proxy_pool.count
+        return {
+            "success": True,
+            "mode": "static",
+            "count": count,
+            "message": f"静态代理已重新加载，当前 {count} 个可用",
+        }
+
+
 # ── 文章库 ─────────────────────────────────────────────
 
 @router.get("/articles", summary="获取文章库列表")

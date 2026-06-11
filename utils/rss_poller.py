@@ -14,6 +14,9 @@ import asyncio
 import json
 import logging
 import os
+import time
+from collections import deque
+from datetime import datetime
 from typing import List, Dict, Optional
 
 import httpx
@@ -22,9 +25,11 @@ from utils.auth_manager import auth_manager
 from utils import rss_store
 from utils.helpers import extract_article_info, parse_article_url, is_image_text_message, has_article_content, is_article_unavailable, get_unavailable_reason
 from utils.http_client import fetch_page
+from utils.settings_manager import settings_manager
 
 logger = logging.getLogger(__name__)
 
+# Legacy module-level constants kept for backward compat (routes/rss.py imports POLL_INTERVAL)
 POLL_INTERVAL = int(os.getenv("RSS_POLL_INTERVAL", "3600"))
 ARTICLES_PER_POLL = int(os.getenv("ARTICLES_PER_POLL", "10"))
 FETCH_FULL_CONTENT = os.getenv("RSS_FETCH_FULL_CONTENT", "true").lower() == "true"
@@ -46,8 +51,15 @@ class RSSPoller:
     _instance = None
     _task: Optional[asyncio.Task] = None
     _running = False
+    _polling = False  # 当前是否正在轮询中
     # [2026-05-15 OS-4] 共享 httpx.AsyncClient 避免每轮每 fakeid 都新建（省 DNS+TLS 握手）
     _http_client: Optional[httpx.AsyncClient] = None
+    # 轮询状态追踪
+    _last_poll_time: Optional[float] = None  # 上次轮询完成时间戳
+    _last_new_count: int = 0                  # 上次轮询新增文章数
+    _last_poll_message: str = ""              # 上次轮询结果摘要
+    # 内存日志缓冲（最近 500 条）
+    _log_buffer: deque = deque(maxlen=500)
 
     def __new__(cls):
         if cls._instance is None:
@@ -64,7 +76,11 @@ class RSSPoller:
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
         )
         self._task = asyncio.create_task(self._loop())
-        logger.info("RSS poller started (interval=%ds)", POLL_INTERVAL)
+        scheduled = self._get_scheduled_time()
+        if scheduled:
+            logger.info("RSS poller started (scheduled=%s)", scheduled)
+        else:
+            logger.info("RSS poller started (interval=%ds)", self._get_poll_interval())
 
     async def stop(self):
         self._running = False
@@ -87,73 +103,183 @@ class RSSPoller:
     def is_running(self) -> bool:
         return self._running
 
+    def _log(self, level: str, message: str):
+        """写入内存日志缓冲，同时输出到 Python logging"""
+        entry = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "level": level,
+            "message": message,
+        }
+        self._log_buffer.append(entry)
+        # 同步到标准 logging
+        getattr(logger, level.lower())(message)
+
+    def get_logs(self, limit: int = 200) -> List[Dict]:
+        """获取最近的日志条目"""
+        logs = list(self._log_buffer)
+        if limit and len(logs) > limit:
+            logs = logs[-limit:]
+        return logs
+
+    def _get_poll_interval(self) -> int:
+        """动态获取轮询间隔（秒），优先从 settings_manager 读取"""
+        return settings_manager.get_int("rss_poll_interval", POLL_INTERVAL)
+
+    def _get_scheduled_time(self) -> str:
+        """获取定时执行时间（HH:MM格式），为空则按间隔轮询"""
+        return settings_manager.get("rss_scheduled_time", "").strip()
+
+    def _get_articles_per_poll(self) -> int:
+        """动态获取每次拉取文章数"""
+        return settings_manager.get_int("articles_per_poll", ARTICLES_PER_POLL)
+
+    def _get_fetch_full_content(self) -> bool:
+        """动态获取是否获取完整内容"""
+        return settings_manager.get_bool("rss_fetch_full_content", FETCH_FULL_CONTENT)
+
+    def _calc_sleep_seconds(self) -> float:
+        """
+        计算下一次轮询的等待秒数。
+
+        逻辑：
+        1. 如果设置了定时执行时间（HH:MM），则计算到下一个该时间点的秒数
+           - 若计算结果 <= 0 或 > 备用间隔，使用备用间隔兜底
+        2. 如果没有设置定时执行时间，使用轮询间隔
+        """
+        scheduled = self._get_scheduled_time()
+
+        if scheduled:
+            try:
+                parts = scheduled.split(":")
+                hour, minute = int(parts[0]), int(parts[1])
+                from datetime import datetime, timedelta
+                now = datetime.now()
+                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                # 如果今天的执行时间已过，设为明天
+                if target <= now:
+                    target += timedelta(days=1)
+                sleep_secs = (target - now).total_seconds()
+                backup = 86400  # 兜底：最大 24 小时
+                # 异常值兜底：超过 24 小时或 <= 0 时用兜底值
+                if sleep_secs <= 0 or sleep_secs > backup:
+                    logger.warning("Scheduled sleep %ds out of range, using backup interval %ds",
+                                   sleep_secs, backup)
+                    return float(backup)
+                logger.info("Next scheduled poll at %s (in %ds)", target.strftime("%Y-%m-%d %H:%M"), int(sleep_secs))
+                return sleep_secs
+            except (ValueError, IndexError) as e:
+                logger.warning("Invalid scheduled time format '%s': %s, falling back to interval", scheduled, e)
+
+        return float(self._get_poll_interval())
+
     async def _loop(self):
+        first = True
         while self._running:
+            # 定时模式：首次启动时先等待到定时时间，不立即轮询
+            if first and self._get_scheduled_time():
+                first = False
+                sleep_secs = self._calc_sleep_seconds()
+                self._log("INFO", f"定时模式，等待 {int(sleep_secs)}s 后执行首次轮询")
+                await asyncio.sleep(sleep_secs)
+                continue
+            first = False
             try:
                 await self._poll_all()
             except Exception as e:
                 logger.error("RSS poll cycle error: %s", e, exc_info=True)
-            await asyncio.sleep(POLL_INTERVAL)
+            sleep_secs = self._calc_sleep_seconds()
+            await asyncio.sleep(sleep_secs)
 
     async def _poll_all(self):
-        fakeids = rss_store.get_all_fakeids()
-        if not fakeids:
-            return
+        self._polling = True
+        total_new = 0
+        total_api_articles = 0
+        poll_start = time.time()
+        try:
+            fakeids = rss_store.get_all_fakeids()
+            if not fakeids:
+                self._log("INFO", "轮询跳过：无订阅")
+                self._last_poll_message = "无订阅"
+                return
 
-        creds = auth_manager.get_credentials()
-        if not creds or not creds.get("token") or not creds.get("cookie"):
-            logger.warning("RSS poll skipped: not logged in")
-            return
+            creds = auth_manager.get_credentials()
+            if not creds or not creds.get("token") or not creds.get("cookie"):
+                self._log("WARNING", "轮询跳过：未登录")
+                self._last_poll_message = "未登录，跳过轮询"
+                return
 
-        # 获取活跃黑名单
-        blacklisted = set(rss_store.get_active_blacklist_fakeids())
-        
-        # 过滤掉黑名单中的公众号
-        active_fakeids = [f for f in fakeids if f not in blacklisted]
-        skipped = len(fakeids) - len(active_fakeids)
-        
-        if skipped > 0:
-            logger.info("RSS poll: %d subscriptions (%d blacklisted, skipped)", 
-                       len(fakeids), skipped)
-        else:
-            logger.info("RSS poll: checking %d subscriptions", len(fakeids))
+            # 获取活跃黑名单
+            blacklisted = set(rss_store.get_active_blacklist_fakeids())
 
-        for fakeid in active_fakeids:
-            try:
-                articles = await self._fetch_article_list(fakeid, creds)
-                if articles and FETCH_FULL_CONTENT:
-                    # 获取完整文章内容
-                    articles = await self._enrich_articles_content(fakeid, articles)
+            # 过滤掉黑名单中的公众号
+            active_fakeids = [f for f in fakeids if f not in blacklisted]
+            skipped = len(fakeids) - len(active_fakeids)
+            total_count = len(fakeids)
 
-                if articles:
-                    # 轮询器拉取的文章标记为 'poll'
-                    new_count = rss_store.save_articles(fakeid, articles, source='poll')
-                    if new_count > 0:
-                        logger.info("RSS: %d new articles for %s", new_count, fakeid[:8])
-                rss_store.update_last_poll(fakeid)
-            except WechatInvalidFakeidError as e:
-                # [2026-05-18] 同步 SaaS 修复：fakeid 在微信侧已失效，自动加入黑名单
-                # 取该 fakeid 的 nickname（如果数据库里有）便于后续运维查看
+            self._log("INFO", f"开始轮询 | 共 {total_count} 个公众号" +
+                      (f"（{skipped} 个黑名单跳过）" if skipped > 0 else ""))
+
+            for idx, fakeid in enumerate(active_fakeids, 1):
                 sub = rss_store.get_subscription(fakeid)
-                nickname = sub.get("nickname", "") if sub else ""
-                logger.warning("Fakeid %s (%s) is invalid on WeChat, adding to blacklist", fakeid[:8], nickname)
+                nickname = sub.get("nickname", fakeid[:8]) if sub else fakeid[:8]
+                fakeid_start = time.time()
                 try:
-                    rss_store.add_to_blacklist(
-                        fakeid, nickname=nickname, reason="invalid_fakeid",
-                        note="[2026-05-18] 微信侧返回 invalid args，fakeid 已失效（注销/改名/重新注册）",
-                    )
-                except Exception as bl_err:
-                    logger.warning("Failed to blacklist invalid fakeid %s: %s", fakeid[:8], bl_err)
-            except Exception as e:
-                logger.error("RSS poll error for %s: %s", fakeid[:8], e)
-            await asyncio.sleep(3)
+                    articles = await self._fetch_article_list(fakeid, creds)
+                    api_count = len(articles) if articles else 0
+                    total_api_articles += api_count
+
+                    if articles and self._get_fetch_full_content():
+                        # 获取完整文章内容
+                        articles = await self._enrich_articles_content(fakeid, articles)
+
+                    if articles:
+                        # 轮询器拉取的文章标记为 'poll'
+                        new_count = rss_store.save_articles(fakeid, articles, source='poll')
+                        total_new += new_count
+                        fakeid_elapsed = time.time() - fakeid_start
+                        status = "成功" if new_count >= 0 else "无新文章"
+                        self._log("INFO",
+                            f"[{idx}/{total_count}] {nickname} 轮询结束"
+                            f" | 状态={status} | API返回={api_count}篇"
+                            f" | 新增={new_count}篇 | 耗时={fakeid_elapsed:.1f}s")
+                    else:
+                        fakeid_elapsed = time.time() - fakeid_start
+                        self._log("INFO",
+                            f"[{idx}/{total_count}] {nickname} 轮询结束"
+                            f" | 状态=无文章 | 耗时={fakeid_elapsed:.1f}s")
+                    rss_store.update_last_poll(fakeid)
+                except WechatInvalidFakeidError as e:
+                    # [2026-05-18] 同步 SaaS 修复：fakeid 在微信侧已失效，自动加入黑名单
+                    self._log("WARNING",
+                        f"[{idx}/{total_count}] {nickname} 已失效（注销/改名），加入黑名单")
+                    try:
+                        rss_store.add_to_blacklist(
+                            fakeid, nickname=nickname, reason="invalid_fakeid",
+                            note="[2026-05-18] 微信侧返回 invalid args，fakeid 已失效（注销/改名/重新注册）",
+                        )
+                    except Exception as bl_err:
+                        self._log("WARNING", f"加入黑名单失败 {nickname}: {bl_err}")
+                except Exception as e:
+                    self._log("ERROR", f"[{idx}/{total_count}] {nickname} 轮询异常: {e}")
+                await asyncio.sleep(3)
+
+            elapsed = time.time() - poll_start
+            self._last_new_count = total_new
+            self._last_poll_message = (
+                f"轮询完成 | 共 {total_count} 个公众号 | API返回 {total_api_articles} 篇"
+                f" | 新增 {total_new} 篇 | 总耗时={elapsed:.1f}s"
+            )
+            self._log("INFO", self._last_poll_message)
+        finally:
+            self._polling = False
+            self._last_poll_time = time.time()
 
     async def _fetch_article_list(self, fakeid: str, creds: Dict) -> List[Dict]:
         params = {
             "sub": "list",
             "search_field": "null",
             "begin": 0,
-            "count": ARTICLES_PER_POLL,
+            "count": self._get_articles_per_poll(),
             "query": "",
             "fakeid": fakeid,
             "type": "101_1",

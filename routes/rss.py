@@ -218,10 +218,26 @@ async def poller_status():
         success=True,
         data={
             "running": rss_poller.is_running,
-            "poll_interval": POLL_INTERVAL,
+            "polling": rss_poller._polling,
+            "poll_interval": rss_poller._get_poll_interval(),
+            "scheduled_time": rss_poller._get_scheduled_time(),
             "subscription_count": len(subs),
+            "last_poll_time": rss_poller._last_poll_time,
+            "last_new_count": rss_poller._last_new_count,
+            "last_poll_message": rss_poller._last_poll_message,
         },
     )
+
+
+@router.get("/rss/logs", summary="获取轮询器日志")
+async def get_poller_logs(limit: int = Query(200, ge=1, le=500)):
+    """
+    获取 RSS 轮询器最近的日志条目。
+    """
+    return {
+        "success": True,
+        "data": rss_poller.get_logs(limit=limit),
+    }
 
 
 # ── 聚合 RSS ─────────────────────────────────────────────

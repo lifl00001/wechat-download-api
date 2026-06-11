@@ -291,6 +291,12 @@ async def get_status():
     return news_searcher.get_status()
 
 
+@router.get("/logs", summary="获取搜索器日志")
+async def get_searcher_logs(limit: int = Query(200, ge=1, le=500)):
+    """获取新闻搜索器最近的日志条目"""
+    return {"success": True, "data": news_searcher.get_logs(limit=limit)}
+
+
 @router.post("/trigger", summary="手动触发全部搜索")
 async def trigger_all():
     """手动触发所有活跃搜索源的一次搜索"""

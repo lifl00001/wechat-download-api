@@ -25,6 +25,7 @@ DEFAULT_SETTINGS = [
     ("rate_limit_per_ip", "RATE_LIMIT_PER_IP", "5", "单IP限频（次/分钟）"),
     ("rate_limit_article_interval", "RATE_LIMIT_ARTICLE_INTERVAL", "3", "文章获取最小间隔（秒）"),
     ("rss_poll_interval", "RSS_POLL_INTERVAL", "3600", "RSS轮询间隔（秒）"),
+    ("rss_scheduled_time", "RSS_SCHEDULED_TIME", "", "RSS定时执行时间（HH:MM格式，如08:00），留空则按间隔轮询"),
     ("articles_per_poll", "ARTICLES_PER_POLL", "10", "每次轮询拉取的文章批次数"),
     ("rss_fetch_full_content", "RSS_FETCH_FULL_CONTENT", "true", "RSS轮询时是否获取完整文章内容"),
     ("proxy_mode", "PROXY_MODE", "static", "代理模式：static(静态代理) 或 dynamic(动态API代理)"),
@@ -43,6 +44,7 @@ DEFAULT_SETTINGS = [
     ("baidu_api_key", "BAIDU_API_KEY", "", "百度千帆 API Key"),
     ("tavily_api_key", "TAVILY_API_KEY", "", "Tavily API Key"),
     ("news_search_interval", "NEWS_SEARCH_INTERVAL", "21600", "新闻搜索间隔（秒），默认6小时"),
+    ("news_scheduled_time", "NEWS_SCHEDULED_TIME", "", "新闻定时执行时间（HH:MM格式，如07:00），留空则按间隔执行"),
 ]
 
 

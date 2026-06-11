@@ -483,6 +483,177 @@
             margin-bottom: var(--space-lg);
         }
 
+        /* Poller Status Bar */
+        .poller-status-bar {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-large);
+            box-shadow: var(--shadow-light);
+            padding: var(--space-md) var(--space-lg);
+            margin-bottom: var(--space-lg);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: var(--space-sm);
+        }
+
+        .poller-left {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            font-size: var(--font-sm);
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+        }
+
+        .poller-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .poller-dot.on { background: var(--success-color); }
+        .poller-dot.off { background: var(--error-color); }
+        .poller-dot.polling { background: var(--primary-color); animation: pulse-dot 1.2s ease-in-out infinite; }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .poller-right {
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+            flex-shrink: 0;
+        }
+
+        .poller-schedule {
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+        }
+
+        .poller-schedule .schedule-tag {
+            display: inline-block;
+            background: rgba(24, 144, 255, 0.08);
+            color: var(--primary-color);
+            padding: 2px 8px;
+            border-radius: var(--radius-small);
+            font-weight: 600;
+        }
+
+        .poller-countdown {
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+        }
+
+        .poller-message {
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+        }
+
+        @media (max-width: 768px) {
+            .poller-status-bar { flex-direction: column; align-items: flex-start; }
+            .poller-right { width: 100%; justify-content: flex-start; }
+        }
+
+        /* Log Viewer Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.45);
+            z-index: 999;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+
+        .modal-box {
+            background: var(--bg-primary);
+            border-radius: var(--radius-large);
+            box-shadow: var(--shadow-base);
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--space-md) var(--space-lg);
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .modal-header h3 {
+            font-size: var(--font-base);
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: var(--text-muted);
+            padding: 4px 8px;
+            border-radius: var(--radius-small);
+        }
+        .modal-close:hover { color: var(--text-primary); background: var(--bg-secondary); }
+
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+        }
+
+        .log-line {
+            display: flex;
+            gap: var(--space-sm);
+            padding: 4px var(--space-md);
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .log-line:last-child { border-bottom: none; }
+        .log-line:hover { background: var(--bg-secondary); }
+
+        .log-time { color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
+        .log-level {
+            flex-shrink: 0;
+            font-weight: 600;
+            width: 56px;
+            text-align: center;
+        }
+        .log-level.INFO { color: var(--success-color); }
+        .log-level.WARNING { color: var(--warning-color); }
+        .log-level.ERROR { color: var(--error-color); }
+        .log-msg { color: var(--text-secondary); word-break: break-all; }
+
+        .log-empty {
+            padding: var(--space-xl);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: var(--font-sm);
+        }
+
+        .modal-footer {
+            padding: var(--space-sm) var(--space-lg);
+            border-top: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+        }
+
         .settings-panel-title {
             font-size: var(--font-lg);
             font-weight: 700;
@@ -618,6 +789,20 @@
             </div>
             <div class="status-actions" id="statusActions">
                 <button class="btn-sm" onclick="checkStatus()">刷新</button>
+            </div>
+        </div>
+
+        <!-- Poller Status -->
+        <div class="poller-status-bar" id="pollerBar">
+            <div class="poller-left">
+                <span style="font-weight:600;color:var(--text-primary);">轮询器</span>
+                <span class="poller-schedule" id="pollerSchedule">加载中...</span>
+                <span class="poller-countdown" id="pollerCountdown"></span>
+            </div>
+            <div class="poller-right">
+                <span style="font-size:var(--font-xs);color:var(--text-muted);" id="pollerSubCount"></span>
+                <button class="btn-sm btn-primary" id="pollerTriggerBtn" onclick="triggerPoll()">立即轮询</button>
+                <button class="btn-sm" onclick="openLogModal()">📋 查看日志</button>
             </div>
         </div>
 
@@ -788,9 +973,16 @@
             <div class="settings-group">
                 <div class="settings-group-title">RSS 配置</div>
                 <div class="settings-row">
+                    <div class="settings-label">定时执行时间</div>
+                    <div class="settings-field">
+                        <input type="time" id="setting_rss_scheduled_time" onchange="togglePollInterval()">
+                        <span style="font-size:var(--font-xs);color:var(--text-muted);margin-left:8px;">留空则按间隔轮询</span>
+                    </div>
+                </div>
+                <div class="settings-row" id="poll_interval_row">
                     <div class="settings-label">轮询间隔(秒)</div>
                     <div class="settings-field">
-                        <input type="number" id="setting_rss_poll_interval" placeholder="300">
+                        <input type="number" id="setting_rss_poll_interval" placeholder="3600">
                     </div>
                 </div>
                 <div class="settings-row">
@@ -898,6 +1090,13 @@
                         <div class="settings-field">
                             <input type="password" id="setting_dynamic_proxy_password" placeholder="">
                         </div>
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-label">代理池状态</div>
+                    <div class="settings-field" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                        <span id="proxyStatusText" style="color:var(--text-secondary);font-size:13px;">未加载</span>
+                        <button type="button" class="btn-sm btn-primary" id="refreshProxyBtn" onclick="refreshProxy()">🔄 刷新代理</button>
                     </div>
                 </div>
             </div>
@@ -1097,9 +1296,13 @@
                 if (data.success) {
                     data.data.forEach(function(item) {
                         var el = document.getElementById('setting_' + item.key_name);
-                        if (el) el.value = item.value || '';
+                        if (el) {
+                            // type=time 输入框需 HH:MM 格式，确保值正确设置
+                            el.value = item.value || '';
+                        }
                     });
                     toggleProxyMode();
+                    togglePollInterval();
                 }
             } catch(e) { console.error('Failed to load settings:', e); }
         }
@@ -1109,7 +1312,7 @@
             var settings = {};
             var keys = [
                 'site_url', 'rate_limit_global', 'rate_limit_per_ip', 'rate_limit_article_interval',
-                'rss_poll_interval', 'articles_per_poll', 'rss_fetch_full_content',
+                'rss_poll_interval', 'rss_scheduled_time', 'articles_per_poll', 'rss_fetch_full_content',
                 'proxy_mode', 'proxy_urls', 'dynamic_proxy_api_url', 'dynamic_proxy_refresh_interval',
                 'dynamic_proxy_jq_path', 'dynamic_proxy_protocol', 'dynamic_proxy_batch_mode',
                 'dynamic_proxy_format', 'dynamic_proxy_separator', 'dynamic_proxy_username',
@@ -1145,11 +1348,269 @@
             if (dynamicFields) dynamicFields.style.display = mode === 'dynamic' ? 'block' : 'none';
         }
 
-        window.addEventListener('load', function() {
+        function togglePollInterval() {
+            var scheduled = document.getElementById('setting_rss_scheduled_time').value;
+            var row = document.getElementById('poll_interval_row');
+            if (row) row.style.display = scheduled ? 'none' : 'flex';
+        }
+
+        // ── Poller Status ──
+        var _pollerTimer = null;
+        var _pollerState = {};  // 缓存最新状态，供倒计时本地刷新
+
+        async function loadPollerStatus() {
+            var schedule = document.getElementById('pollerSchedule');
+            var countdown = document.getElementById('pollerCountdown');
+            var subCount = document.getElementById('pollerSubCount');
+            var btn = document.getElementById('pollerTriggerBtn');
+            try {
+                var res = await fetch('/api/rss/status');
+                var d = await res.json();
+                var s = (d && d.data) ? d.data : {};
+                _pollerState = s;
+
+                // 轮询中按钮置灰
+                if (s.polling) {
+                    btn.disabled = true;
+                    btn.textContent = '轮询中...';
+                    schedule.innerHTML = '<span class="schedule-tag" style="background:rgba(24,144,255,0.1);color:var(--primary-color);">轮询中</span>';
+                    countdown.textContent = '';
+                } else {
+                    btn.disabled = false;
+                    btn.textContent = '立即轮询';
+                    renderCountdown(s, schedule, countdown);
+                }
+
+                subCount.textContent = (s.subscription_count || 0) + ' 个订阅';
+
+                // Auto refresh
+                if (_pollerTimer) clearTimeout(_pollerTimer);
+                _pollerTimer = setTimeout(loadPollerStatus, s.polling ? 3000 : 10000);
+            } catch (e) {
+                schedule.innerHTML = '<span class="schedule-tag" style="color:var(--error-color);">获取状态失败</span>';
+                countdown.textContent = '';
+                if (_pollerTimer) clearTimeout(_pollerTimer);
+                _pollerTimer = setTimeout(loadPollerStatus, 10000);
+            }
+        }
+
+        // 渲染倒计时（本地每秒刷新）
+        function renderCountdown(s, schedule, countdown) {
+            var scheduledTime = s.scheduled_time || '';
+            var pollInterval = s.poll_interval || 3600;
+            var lastPollTime = s.last_poll_time;
+
+            if (scheduledTime) {
+                schedule.innerHTML = '<span class="schedule-tag">定时 ' + escHtml(scheduledTime) + '</span>';
+                var parts = scheduledTime.split(':');
+                var h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+                var now = new Date();
+                var target = new Date(now);
+                target.setHours(h, m, 0, 0);
+                if (target <= now) target.setDate(target.getDate() + 1);
+                var diff = Math.max(0, Math.floor((target - now) / 1000));
+                countdown.textContent = '· 还有 ' + formatDuration(diff);
+            } else {
+                var intervalMin = Math.round(pollInterval / 60);
+                schedule.innerHTML = '<span class="schedule-tag">间隔 ' + intervalMin + ' 分钟</span>';
+                if (lastPollTime) {
+                    var elapsed = Math.floor(Date.now() / 1000 - lastPollTime);
+                    var remain = Math.max(0, pollInterval - elapsed);
+                    countdown.textContent = '· 还有 ' + formatDuration(remain);
+                } else {
+                    countdown.textContent = '· 等待首次轮询';
+                }
+            }
+        }
+
+        // 本地每秒刷新倒计时（不依赖网络请求）
+        function tickCountdown() {
+            if (!_pollerState || _pollerState.polling) return;
+            var schedule = document.getElementById('pollerSchedule');
+            var countdown = document.getElementById('pollerCountdown');
+            if (schedule && countdown) renderCountdown(_pollerState, schedule, countdown);
+        }
+
+        function formatDuration(seconds) {
+            if (seconds <= 0) return '0秒';
+            var h = Math.floor(seconds / 3600);
+            var m = Math.floor((seconds % 3600) / 60);
+            var s = seconds % 60;
+            var parts = [];
+            if (h > 0) parts.push(h + '时');
+            if (m > 0) parts.push(m + '分');
+            if (s > 0 || parts.length === 0) parts.push(s + '秒');
+            return parts.join('');
+        }
+
+        async function triggerPoll() {
+            var btn = document.getElementById('pollerTriggerBtn');
+            btn.disabled = true;
+            btn.textContent = '轮询中...';
+            try {
+                var res = await fetch('/api/rss/poll', { method: 'POST' });
+                var d = await res.json();
+                if (window.showToast) {
+                    window.showToast(d.data && d.data.message ? d.data.message : '轮询完成', 'success');
+                }
+            } catch (e) {
+                if (window.showToast) window.showToast('轮询失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '立即轮询';
+                loadPollerStatus();
+            }
+        }
+
+        // ── 代理池 ──
+        function renderProxyStatus(pool) {
+            var el = document.getElementById('proxyStatusText');
+            if (!el || !pool) return;
+            var parts = [];
+            parts.push('模式: ' + (pool.mode === 'dynamic' ? '动态' : '静态'));
+            if (!pool.enabled) {
+                parts.push('状态: 未启用');
+            } else if (pool.mode === 'dynamic' && pool.dynamic) {
+                parts.push('可用 ' + pool.dynamic.alive + ' / ' + pool.dynamic.total);
+            } else if (pool.static) {
+                parts.push('健康 ' + pool.static.healthy + ' / ' + pool.static.total);
+            }
+            el.textContent = parts.join('  ·  ');
+        }
+
+        async function loadProxyStatus() {
+            try {
+                var res = await fetch('/api/health');
+                var d = await res.json();
+                if (d && d.proxy_pool) renderProxyStatus(d.proxy_pool);
+            } catch (e) { /* 静默失败，状态行保留占位 */ }
+        }
+
+        async function refreshProxy() {
+            var btn = document.getElementById('refreshProxyBtn');
+            var txt = document.getElementById('proxyStatusText');
+            var old = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '刷新中...';
+            if (txt) txt.textContent = '正在刷新代理池...';
+            try {
+                var res = await fetch('/api/admin/proxy/refresh', { method: 'POST' });
+                var d = await res.json();
+                if (d.success) {
+                    if (window.showToast) window.showToast(d.message || '刷新成功', 'success');
+                } else {
+                    if (window.showToast) window.showToast(d.message || '刷新失败', 'error');
+                }
+            } catch (e) {
+                if (window.showToast) window.showToast('刷新失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = old;
+                loadProxyStatus();
+            }
+        }
+
+        // ── Log Viewer ──
+        var _logRefreshTimer = null;
+
+        async function openLogModal() {
+            bindModalOverlay();
+            document.getElementById('logModal').classList.add('open');
+            await loadLogs();
+        }
+
+        function closeLogModal() {
+            document.getElementById('logModal').classList.remove('open');
+            if (_logRefreshTimer) { clearTimeout(_logRefreshTimer); _logRefreshTimer = null; }
+        }
+
+        async function loadLogs() {
+            try {
+                var res = await fetch('/api/rss/logs?limit=200');
+                var d = await res.json();
+                var body = document.getElementById('logBody');
+                if (!d.success || !d.data || d.data.length === 0) {
+                    body.innerHTML = '<div class="log-empty">暂无日志</div>';
+                    document.getElementById('logFooterInfo').textContent = '暂无日志';
+                    return;
+                }
+                var logs = d.data;
+                var html = '';
+                // 倒序显示（最新在上）
+                for (var i = logs.length - 1; i >= 0; i--) {
+                    var entry = logs[i];
+                    var lvl = (entry.level || 'INFO').toUpperCase();
+                    html += '<div class="log-line">';
+                    html += '<span class="log-time">' + escHtml(entry.time) + '</span>';
+                    html += '<span class="log-level ' + lvl + '">' + lvl + '</span>';
+                    html += '<span class="log-msg">' + escHtml(entry.message) + '</span>';
+                    html += '</div>';
+                }
+                body.innerHTML = html;
+
+                document.getElementById('logFooterInfo').textContent = '共 ' + logs.length + ' 条';
+
+                // Auto refresh (3s while polling, 15s otherwise)
+                if (document.getElementById('logAutoRefresh').checked) {
+                    var interval = (_pollerState && _pollerState.polling) ? 3000 : 15000;
+                    _logRefreshTimer = setTimeout(loadLogs, interval);
+                }
+            } catch (e) {
+                document.getElementById('logBody').innerHTML = '<div class="log-empty">加载失败: ' + escHtml(e.message) + '</div>';
+            }
+        }
+
+        // Close modal on overlay click（延迟绑定，modal HTML 在脚本之后）
+        function bindModalOverlay() {
+            var modal = document.getElementById('logModal');
+            if (modal && !modal._overlayBound) {
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) closeLogModal();
+                });
+                modal._overlayBound = true;
+            }
+        }
+
+        function escHtml(s) {
+            var d = document.createElement('div');
+            d.textContent = s || '';
+            return d.innerHTML;
+        }
+
+        function initPage() {
             checkStatus();
             loadSettings();
-        });
+            loadPollerStatus();
+            loadProxyStatus();
+            bindModalOverlay();
+            // 每秒本地刷新倒计时
+            setInterval(tickCountdown, 1000);
+        }
+
+        // 立即初始化：脚本位于 body 末尾，DOM 已解析完成，无需等待 load 事件
+        // （等待 load 事件在缓存/bfcache 场景下可能不触发，导致状态栏卡在"加载中"）
+        initPage();
     </script>
+    <!-- Log Viewer Modal -->
+    <div class="modal-overlay" id="logModal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3>📋 轮询日志</h3>
+                <button class="modal-close" onclick="closeLogModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="logBody">
+                <div class="log-empty">加载中...</div>
+            </div>
+            <div class="modal-footer">
+                <span id="logFooterInfo">最近 200 条</span>
+                <div style="display:flex;gap:var(--space-sm);">
+                    <label><input type="checkbox" id="logAutoScroll" checked> 自动滚动</label>
+                    <label><input type="checkbox" id="logAutoRefresh" checked> 自动刷新</label>
+                </div>
+            </div>
+        </div>
+    </div>
+
 <script src="/static/common.js"></script>
 </body>
 </html>

@@ -15,7 +15,9 @@ import json
 import logging
 import re
 import time
-from typing import List, Dict, Optional
+from collections import deque
+from datetime import datetime
+from typing import List, Dict, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -343,23 +345,33 @@ def fetch_aihot(query: str = "", mode: str = "selected",
 
 # ── 搜索循环 ─────────────────────────────────────────────────
 
-def run_search_cycle():
+def run_search_cycle(log: Optional[Callable[[str], None]] = None):
     """
     遍历所有活跃搜索源，调用配置的搜索引擎，保存结果
     返回 (总源数, 总新增条目数)
+
+    Args:
+        log: 可选的日志回调（接收消息字符串）。传入时用于把进度写入搜索器内存缓冲。
     """
+    def _log(msg: str):
+        (log or (lambda m: logger.info(m)))(msg)
+
     sources = news_store.get_active_sources()
     if not sources:
-        logger.info("No active news sources, skipping search cycle")
+        _log("搜索跳过：无活跃搜索源")
         return 0, 0
 
+    cycle_start = time.time()
+    _log(f"开始搜索 | 共 {len(sources)} 个活跃搜索源")
+
     total_saved = 0
-    for source in sources:
+    for idx, source in enumerate(sources, 1):
         source_id = source["id"]
         name = source.get("name", "")
         engines = json.loads(source.get("search_engines", '["baidu","tavily"]'))
         max_results = source.get("max_results", 10)
 
+        src_start = time.time()
         saved = 0
 
         if "baidu" in engines:
@@ -388,9 +400,11 @@ def run_search_cycle():
                 saved += news_store.save_news_items(source_id, items, "aihot")
 
         total_saved += saved
-        logger.info("Source '%s' (id=%d): saved %d items", name, source_id, saved)
+        elapsed = time.time() - src_start
+        _log(f"[{idx}/{len(sources)}] {name} 搜索结束 | 新增={saved}条 | 耗时={elapsed:.1f}s")
 
-    logger.info("Search cycle complete: %d sources, %d total items saved", len(sources), total_saved)
+    elapsed = time.time() - cycle_start
+    _log(f"搜索完成 | 共 {len(sources)} 个搜索源 | 新增 {total_saved} 条 | 总耗时={elapsed:.1f}s")
     return len(sources), total_saved
 
 
@@ -435,13 +449,18 @@ def run_single_source_search(source_id: int) -> int:
 # ── 后台定时循环（单例）─────────────────────────────────────────
 
 class NewsSearcher:
-    """新闻搜索定时循环单例"""
+    """新闻搜索定时循环单例（支持间隔模式 / 定时模式）"""
 
     _instance = None
     _task: Optional[asyncio.Task] = None
     _running = False
     _last_search_time: int = 0
     _last_search_results: str = ""
+    _last_new_count: int = 0
+    _last_source_count: int = 0
+    _next_run_at: Optional[float] = None      # 下次预计运行时间戳（用于倒计时）
+    # 内存日志缓冲（最近 500 条）
+    _log_buffer: deque = deque(maxlen=500)
 
     def __new__(cls):
         if cls._instance is None:
@@ -453,7 +472,11 @@ class NewsSearcher:
             return
         self._running = True
         self._task = asyncio.create_task(self._loop())
-        logger.info("News searcher started")
+        scheduled = self._get_scheduled_time()
+        if scheduled:
+            logger.info("News searcher started (scheduled=%s)", scheduled)
+        else:
+            logger.info("News searcher started (interval=%ds)", self._get_interval())
 
     async def stop(self):
         self._running = False
@@ -463,51 +486,129 @@ class NewsSearcher:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        self._next_run_at = None
         logger.info("News searcher stopped")
 
-    async def _loop(self):
-        """后台循环：按间隔执行搜索"""
-        while self._running:
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def _log(self, level: str, message: str):
+        """写入内存日志缓冲，同时输出到 Python logging"""
+        entry = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "level": level,
+            "message": message,
+        }
+        self._log_buffer.append(entry)
+        getattr(logger, level.lower())(message)
+
+    def get_logs(self, limit: int = 200) -> List[Dict]:
+        """获取最近的日志条目"""
+        logs = list(self._log_buffer)
+        if limit and len(logs) > limit:
+            logs = logs[-limit:]
+        return logs
+
+    def _get_interval(self) -> int:
+        """动态获取搜索间隔（秒）"""
+        return max(settings_manager.get_int("news_search_interval", 21600), 60)
+
+    def _get_scheduled_time(self) -> str:
+        """获取定时执行时间（HH:MM），为空则按间隔执行"""
+        return settings_manager.get("news_scheduled_time", "").strip()
+
+    def _calc_sleep_seconds(self) -> float:
+        """
+        计算下一次搜索的等待秒数。
+        1. 设置了定时时间（HH:MM）→ 计算到下一个该时间点的秒数（兜底 86400s）
+        2. 未设置 → 使用间隔
+        """
+        scheduled = self._get_scheduled_time()
+        if scheduled:
             try:
-                interval = settings_manager.get_int("news_search_interval", 21600)
-                interval = max(interval, 60)
-                logger.info("News searcher sleeping %ds until next cycle", interval)
-                await asyncio.sleep(interval)
+                parts = scheduled.split(":")
+                hour, minute = int(parts[0]), int(parts[1])
+                from datetime import timedelta
+                now = datetime.now()
+                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if target <= now:
+                    target += timedelta(days=1)
+                sleep_secs = (target - now).total_seconds()
+                backup = 86400
+                if sleep_secs <= 0 or sleep_secs > backup:
+                    logger.warning("News scheduled sleep %ds out of range, using backup %d",
+                                   sleep_secs, backup)
+                    return float(backup)
+                logger.info("Next scheduled news search at %s (in %ds)",
+                            target.strftime("%Y-%m-%d %H:%M"), int(sleep_secs))
+                return sleep_secs
+            except (ValueError, IndexError) as e:
+                logger.warning("Invalid news scheduled time '%s': %s, falling back to interval",
+                               scheduled, e)
+        return float(self._get_interval())
 
-                if not self._running:
-                    break
+    async def _run_cycle(self):
+        """执行一次搜索并更新状态/日志，返回 (源数, 新增条数)"""
+        loop = asyncio.get_event_loop()
+        source_count, item_count = await loop.run_in_executor(
+            None, lambda: run_search_cycle(log=lambda m: self._log("INFO", m))
+        )
+        self._last_search_time = int(time.time())
+        self._last_source_count = source_count
+        self._last_new_count = item_count
+        self._last_search_results = f"{source_count} 个搜索源，新增 {item_count} 条新闻"
+        return source_count, item_count
 
-                loop = asyncio.get_event_loop()
-                source_count, item_count = await loop.run_in_executor(None, run_search_cycle)
-                self._last_search_time = int(time.time())
-                self._last_search_results = f"{source_count} sources, {item_count} items"
-
+    async def _loop(self):
+        """后台循环：支持间隔模式 / 定时模式"""
+        first = True
+        while self._running:
+            # 定时模式：首次启动先等待到定时时间，不立即搜索
+            if first and self._get_scheduled_time():
+                first = False
+                sleep_secs = self._calc_sleep_seconds()
+                self._next_run_at = time.time() + sleep_secs
+                self._log("INFO", f"定时模式，等待 {int(sleep_secs)}s 后执行首次搜索")
+                await asyncio.sleep(sleep_secs)
+                continue
+            first = False
+            try:
+                await self._run_cycle()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("News search cycle error: %s", e)
-                try:
-                    await asyncio.sleep(60)
-                except asyncio.CancelledError:
-                    break
+                logger.error("News search cycle error: %s", e, exc_info=True)
+                self._log("ERROR", f"搜索周期异常: {e}")
+            sleep_secs = self._calc_sleep_seconds()
+            self._next_run_at = time.time() + sleep_secs
+            try:
+                await asyncio.sleep(sleep_secs)
+            except asyncio.CancelledError:
+                break
 
     async def search_now(self):
-        """手动触发一次搜索"""
-        loop = asyncio.get_event_loop()
-        source_count, item_count = await loop.run_in_executor(None, run_search_cycle)
-        self._last_search_time = int(time.time())
-        self._last_search_results = f"{source_count} sources, {item_count} items"
+        """手动触发一次搜索，返回 (源数, 新增条数)"""
+        source_count, item_count = await self._run_cycle()
+        # 手动触发后，重新计算下次运行时间供倒计时显示
+        sleep_secs = self._calc_sleep_seconds()
+        self._next_run_at = time.time() + sleep_secs
         return source_count, item_count
 
     def get_status(self) -> Dict:
         """获取搜索器状态"""
-        interval = settings_manager.get_int("news_search_interval", 21600)
+        interval = self._get_interval()
+        scheduled = self._get_scheduled_time()
         db_status = news_store.get_search_status()
         return {
             "running": self._running,
+            "mode": "scheduled" if scheduled else "interval",
             "interval_seconds": interval,
+            "scheduled_time": scheduled,
+            "next_run_at": self._next_run_at,
             "last_search_at": self._last_search_time,
             "last_search_results": self._last_search_results,
+            "last_new_count": self._last_new_count,
             **db_status,
         }
 

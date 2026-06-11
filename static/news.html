@@ -276,7 +276,10 @@
             <div class="section">
                 <div class="section-header">
                     <h2>搜索器状态</h2>
-                    <button class="btn-sm btn-primary" id="btnTrigger" onclick="triggerAll()">立即执行全部</button>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn-sm btn-primary" id="btnTrigger" onclick="triggerAll()">立即执行全部</button>
+                        <button class="btn-sm" onclick="openLogModal()">📋 查看日志</button>
+                    </div>
                 </div>
                 <div id="searcherStatus"><div class="loading">加载中...</div></div>
             </div>
@@ -304,8 +307,16 @@
                 </div>
             </div>
             <div class="section">
-                <h2>搜索间隔配置</h2>
+                <h2>定时任务配置</h2>
                 <div class="form-group">
+                    <label>定时执行时间</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="time" id="scheduledTime" style="width:120px;" onchange="toggleIntervalRow()">
+                        <button class="btn-sm btn-primary" onclick="saveSchedule()">保存</button>
+                        <span class="hint">设置后每天定时执行一次；留空则按下方间隔执行（与 RSS 轮询互不影响，可并行）</span>
+                    </div>
+                </div>
+                <div class="form-group" id="intervalRow">
                     <label>搜索间隔（分钟）</label>
                     <div style="display:flex;gap:8px;align-items:center;">
                         <input type="number" id="intervalMin" min="1" max="1440" style="width:120px;" placeholder="360">
@@ -427,6 +438,25 @@
             <div class="form-actions">
                 <button class="btn-sm" onclick="closeSourceModal()">取消</button>
                 <button class="btn-sm btn-primary" onclick="saveSource()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 日志查看 Modal -->
+    <div class="modal-overlay" id="logModal" onclick="if(event.target===this)closeLogModal()">
+        <div class="modal" style="max-width:720px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-md);">
+                <h3 style="margin:0;">搜索器日志</h3>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <label style="font-size:var(--font-xs);color:var(--text-muted);display:flex;align-items:center;gap:4px;">
+                        <input type="checkbox" id="logAutoRefresh" onchange="toggleLogAutoRefresh()"> 自动刷新
+                    </label>
+                    <button class="btn-sm" onclick="loadLogs()">刷新</button>
+                    <button class="btn-sm" onclick="closeLogModal()">关闭</button>
+                </div>
+            </div>
+            <div id="logContent" style="max-height:60vh;overflow-y:auto;background:var(--bg-secondary);border-radius:var(--radius-base);padding:12px;font-family:monospace;font-size:12px;line-height:1.7;">
+                <div class="loading">加载中...</div>
             </div>
         </div>
     </div>
@@ -698,21 +728,74 @@
     }
 
     // ── Tab 2: 定时任务 ─────────────────────────────────
+    var _newsState = {};   // 缓存搜索器状态，供倒计时本地刷新
+    var _newsTimer = null;
+
+    function fmtCountdown(sec) {
+        if (sec <= 0) return '即将执行';
+        var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+        if (h > 0) return '还有 ' + h + '时' + m + '分' + s + '秒';
+        if (m > 0) return '还有 ' + m + '分' + s + '秒';
+        return '还有 ' + s + '秒';
+    }
+
+    function renderNewsCountdown() {
+        var el = document.getElementById('newsCountdown');
+        if (!el) return;
+        var s = _newsState;
+        if (!s.running) { el.textContent = ''; return; }
+        if (!s.next_run_at) { el.textContent = ''; return; }
+        var remain = s.next_run_at - Math.floor(Date.now() / 1000);
+        var label = s.mode === 'scheduled' ? ('定时 ' + (s.scheduled_time || '')) : '间隔模式';
+        el.textContent = '· ' + label + ' · ' + fmtCountdown(remain);
+    }
+
+    function tickNewsCountdown() { renderNewsCountdown(); }
+
+    function toggleIntervalRow() {
+        var scheduled = document.getElementById('scheduledTime').value;
+        var row = document.getElementById('intervalRow');
+        if (row) row.style.display = scheduled ? 'none' : 'block';
+    }
+
+    async function saveSchedule() {
+        var t = document.getElementById('scheduledTime').value.trim();
+        try {
+            var res = await fetch('/api/admin/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: { news_scheduled_time: t } }),
+            });
+            await res.json();
+            showToastSuccess(t ? ('已设置每天 ' + t + ' 定时执行') : '已改为按间隔执行');
+            toggleIntervalRow();
+            loadSearcherStatus();
+        } catch (e) { showToastError('保存失败: ' + e.message); }
+    }
+
     async function loadSearcherStatus() {
         var el = document.getElementById('searcherStatus');
         try {
             var res = await fetch('/api/news/status');
             var d = await res.json();
-            var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">';
-            html += '<div class="report-stat"><div class="num"><span class="status-dot ' + (d.running ? 'running' : 'stopped') + '"></span>' + (d.running ? '运行中' : '已停止') + '</div><div class="label">状态</div></div>';
+            _newsState = d;
+
+            var countdownLine = '<div style="margin-bottom:12px;font-size:13px;color:var(--text-secondary);">'
+                + '<span class="status-dot ' + (d.running ? 'running' : 'stopped') + '"></span> '
+                + (d.running ? '运行中' : '已停止')
+                + ' <span id="newsCountdown"></span></div>';
+
+            var html = countdownLine + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">';
             html += '<div class="report-stat"><div class="num">' + (d.active_sources || 0) + '</div><div class="label">活跃搜索源</div></div>';
             html += '<div class="report-stat"><div class="num">' + (d.items_today || 0) + '</div><div class="label">今日新增</div></div>';
+            html += '<div class="report-stat"><div class="num">' + (d.last_new_count || 0) + '</div><div class="label">上次新增</div></div>';
             html += '<div class="report-stat"><div class="num">' + timeAgo(d.last_search_at) + '</div><div class="label">上次搜索</div></div>';
             html += '</div>';
             if (d.last_search_results) {
                 html += '<div style="margin-top:12px;font-size:12px;color:var(--text-muted);">上次结果: ' + escHtml(d.last_search_results) + '</div>';
             }
             el.innerHTML = html;
+            renderNewsCountdown();
 
             // 设置间隔输入框
             var intervalSec = d.interval_seconds || 21600;
@@ -720,6 +803,13 @@
             var hint = document.getElementById('intervalHint');
             if (intervalSec >= 86400) hint.textContent = '（' + Math.round(intervalSec / 3600) + ' 小时）';
             else hint.textContent = '（' + Math.round(intervalSec / 60) + ' 分钟）';
+
+            // 设置定时时间输入框
+            var schedInput = document.getElementById('scheduledTime');
+            if (schedInput) {
+                schedInput.value = d.scheduled_time || '';
+                toggleIntervalRow();
+            }
         } catch (e) {
             el.innerHTML = '<div class="empty">加载失败: ' + e.message + '</div>';
         }
@@ -799,6 +889,50 @@
             loadSearcherStatus();
         } catch (e) { showToastError('搜索失败: ' + e.message); }
         finally { btn.disabled = false; btn.textContent = '立即执行全部'; }
+    }
+
+    // ── 日志查看 ──
+    var _logTimer = null;
+    function openLogModal() {
+        document.getElementById('logModal').classList.add('show');
+        loadLogs();
+    }
+    function closeLogModal() {
+        document.getElementById('logModal').classList.remove('show');
+        if (_logTimer) { clearInterval(_logTimer); _logTimer = null; }
+        var cb = document.getElementById('logAutoRefresh');
+        if (cb) cb.checked = false;
+    }
+    function toggleLogAutoRefresh() {
+        var cb = document.getElementById('logAutoRefresh');
+        if (cb && cb.checked) {
+            _logTimer = setInterval(loadLogs, 3000);
+        } else if (_logTimer) {
+            clearInterval(_logTimer); _logTimer = null;
+        }
+    }
+    async function loadLogs() {
+        var el = document.getElementById('logContent');
+        try {
+            var res = await fetch('/api/news/logs?limit=200');
+            var d = await res.json();
+            var logs = (d && d.data) ? d.data : [];
+            if (!logs.length) { el.innerHTML = '<div style="color:var(--text-muted);">暂无日志</div>'; return; }
+            // 倒序显示（最新在上）
+            logs.reverse();
+            var colorMap = { ERROR: '#e74c3c', WARNING: '#f39c12', INFO: 'var(--text-primary)' };
+            var html = logs.map(function(l) {
+                var color = colorMap[l.level] || 'var(--text-primary)';
+                return '<div style="color:' + color + ';">'
+                    + '<span style="color:var(--text-muted);">' + escHtml(l.time) + '</span> '
+                    + '<span style="font-weight:600;">' + escHtml(l.level) + '</span> '
+                    + escHtml(l.message) + '</div>';
+            }).join('');
+            el.innerHTML = html;
+            el.scrollTop = 0;
+        } catch (e) {
+            el.innerHTML = '<div style="color:#e74c3c;">加载失败: ' + escHtml(e.message) + '</div>';
+        }
     }
 
     // ── Tab 3: 新闻浏览 ─────────────────────────────────
@@ -975,6 +1109,8 @@
     window.addEventListener('load', function() {
         loadCategories();
         checkApiKeys().then(function() { loadSources(); });
+        // 每秒本地刷新倒计时（定时任务 tab 可见时也会实时更新）
+        setInterval(tickNewsCountdown, 1000);
     });
     </script>
 <script src="/static/common.js"></script>
