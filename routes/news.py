@@ -101,12 +101,12 @@ async def list_sources():
 
 
 @router.post("/sync-stock-categories", summary="从投资分类表同步搜索源")
-async def sync_stock_categories(engines: str = Query('["baidu","doubao"]'),
+async def sync_stock_categories(engines: str = Query('["baidu","doubao","tavily"]'),
                                 max_results: int = Query(10, ge=1, le=50)):
     """
     从 ruoyi-vue-pro.stock_investment_category 读取投资分类，
     提取 prompt_template 中的【关键词】，同步为新闻搜索源。
-    - 新建：分类名作为搜索源名，关键词填入 query_baidu（百度+豆包共用）
+    - 新建：分类名作为搜索源名，关键词同时填入 query_baidu（百度+豆包）和 query_tavily（Tavily）
     - 更新：同名搜索源仅更新关键词，保留用户配置的其他字段
     - 子分类名带父前缀（如「半导体/存储芯片」）避免重名歧义
     """

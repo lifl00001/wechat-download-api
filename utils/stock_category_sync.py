@@ -115,7 +115,7 @@ def _get_parent_label(cat: Dict, all_cats: List[Dict]) -> str:
 
 
 def sync_stock_categories_to_sources(
-    engines: str = '["baidu","doubao"]',
+    engines: str = '["baidu","doubao","tavily"]',
     max_results: int = 10,
 ) -> Tuple[int, int, List[str]]:
     """
@@ -123,8 +123,8 @@ def sync_stock_categories_to_sources(
 
     策略：
     - 搜索源 name 用分类名（子分类带父前缀避免歧义，如「半导体/存储芯片」）
-    - query_baidu 用提取的关键词
-    - 已存在同名源 → 更新 query_baidu（保留用户改过的引擎/分类等其他字段）
+    - 关键词同时填入 query_baidu（百度+豆包）和 query_tavily（Tavily）
+    - 已存在同名源 → 更新 query_baidu 和 query_tavily（保留用户改过的引擎/分类等其他字段）
     - 不存在 → 新建
     - 分类表中删除的分类不会自动删搜索源（避免误删用户数据）
 
@@ -152,20 +152,51 @@ def sync_stock_categories_to_sources(
         keywords = cat["keywords"] or cat["name"]
 
         if source_name in existing:
-            # 已存在：仅更新关键词
+            # 已存在：更新关键词（query_baidu + query_tavily）+ 补全缺失的引擎
             src = existing[source_name]
             old_kw = src.get("query_baidu", "")
-            if old_kw != keywords:
-                news_store.update_news_source(src["id"], query_baidu=keywords)
+            old_kw_t = src.get("query_tavily", "")
+            kw_changed = (old_kw != keywords or old_kw_t != keywords)
+
+            # 合并目标引擎到现有引擎（保留用户额外配置的引擎，如 aihot）
+            import json as _json
+            try:
+                cur_engines = _json.loads(src.get("search_engines", "[]"))
+            except Exception:
+                cur_engines = []
+            try:
+                tgt_engines = _json.loads(engines)
+            except Exception:
+                tgt_engines = []
+            merged = list(cur_engines)
+            for e in tgt_engines:
+                if e not in merged:
+                    merged.append(e)
+            eng_changed = (merged != cur_engines)
+
+            updates = {}
+            if kw_changed:
+                updates["query_baidu"] = keywords
+                updates["query_tavily"] = keywords
+            if eng_changed:
+                updates["search_engines"] = _json.dumps(merged, ensure_ascii=False)
+            if updates:
+                news_store.update_news_source(src["id"], **updates)
                 updated += 1
-                messages.append(f"更新「{source_name}」关键词 ({len(keywords)}字)")
+                tags = []
+                if kw_changed:
+                    tags.append(f"关键词{len(keywords)}字")
+                if eng_changed:
+                    tags.append(f"引擎→{_json.dumps(merged, ensure_ascii=False)}")
+                messages.append(f"更新「{source_name}」({', '.join(tags)})")
             else:
-                messages.append(f"跳过「{source_name}」(关键词未变)")
+                messages.append(f"跳过「{source_name}」(无变化)")
         else:
             # 新建
             news_store.add_news_source(
                 name=source_name,
                 query_baidu=keywords,
+                query_tavily=keywords,
                 search_engines=engines,
                 max_results=max_results,
             )
