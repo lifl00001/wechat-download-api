@@ -451,8 +451,8 @@ def run_search_cycle(log: Optional[Callable[[str], None]] = None):
                     saved += news_store.save_news_items(source_id, items, "baidu")
 
         if "doubao" in engines:
-            # 豆包/火山引擎联网搜索，复用百度关键词
-            query = source.get("query_baidu", "")
+            # 豆包/火山引擎联网搜索，复用百度关键词；百度关键词为空时回退到搜索源名称
+            query = source.get("query_baidu", "") or source.get("name", "")
             if query:
                 items = fetch_doubao(query, max_results=max_results)
                 if items:
@@ -511,8 +511,8 @@ def run_single_source_search(source_id: int) -> int:
                 saved += news_store.save_news_items(source_id, items, "baidu")
 
     if "doubao" in engines:
-        # 豆包/火山引擎联网搜索，复用百度关键词
-        query = source.get("query_baidu", "")
+        # 豆包/火山引擎联网搜索，复用百度关键词；百度关键词为空时回退到搜索源名称
+        query = source.get("query_baidu", "") or source.get("name", "")
         if query:
             items = fetch_doubao(query, max_results=max_results)
             if items:

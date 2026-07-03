@@ -266,7 +266,10 @@
             <div class="section">
                 <div class="section-header">
                     <h2>搜索源列表</h2>
-                    <button class="btn-sm btn-primary" onclick="openSourceModal()">+ 新建搜索源</button>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn-sm btn-success" onclick="syncStockCategories()">🔄 从投资分类同步</button>
+                        <button class="btn-sm btn-primary" onclick="openSourceModal()">+ 新建搜索源</button>
+                    </div>
                 </div>
                 <div id="sourceList"><div class="loading">加载中...</div></div>
             </div>
@@ -392,7 +395,7 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>百度搜索关键词</label>
+                    <label>百度 / 豆包搜索关键词</label>
                     <input type="text" id="srcQueryBaidu" placeholder="如：AI 投资 融资 最新动态">
                 </div>
                 <div class="form-group">
@@ -554,6 +557,26 @@
                 if (item.key_name === 'tavily_api_key' && item.value) _apiKeysConfigured.tavily = true;
             });
         } catch(e) {}
+    }
+
+    async function syncStockCategories() {
+        if (!confirm('从 ruoyi-vue-pro.stock_investment_category 同步投资分类为搜索源？\n\n' +
+                     '· 新建：分类名作为搜索源名，关键词自动填入（百度+豆包共用）\n' +
+                     '· 更新：同名搜索源仅更新关键词，保留你的其他配置\n' +
+                     '· 子分类名带父前缀（如「半导体/存储芯片」）')) return;
+        try {
+            showToast('正在同步投资分类...');
+            var res = await fetch('/api/news/sync-stock-categories', { method: 'POST' });
+            var d = await res.json();
+            if (d.success) {
+                showToastSuccess('同步完成：新建 ' + d.created + ' 个，更新 ' + d.updated + ' 个');
+                await loadSources();
+            } else {
+                showToastError('同步失败: ' + (d.detail || '未知错误'));
+            }
+        } catch (e) {
+            showToastError('同步失败: ' + e.message);
+        }
     }
 
     async function loadSources() {

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from utils import news_store
 from utils.news_fetcher import news_searcher, run_single_source_search, fetch_baidu, fetch_doubao, fetch_tavily, fetch_aihot, fetch_single_item_content
 from utils.settings_manager import settings_manager
+from utils.stock_category_sync import sync_stock_categories_to_sources, fetch_stock_categories
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,42 @@ async def list_sources():
     """获取所有新闻搜索源列表"""
     sources = news_store.list_news_sources()
     return {"sources": sources, "total": len(sources)}
+
+
+@router.post("/sync-stock-categories", summary="从投资分类表同步搜索源")
+async def sync_stock_categories(engines: str = Query('["baidu","doubao"]'),
+                                max_results: int = Query(10, ge=1, le=50)):
+    """
+    从 ruoyi-vue-pro.stock_investment_category 读取投资分类，
+    提取 prompt_template 中的【关键词】，同步为新闻搜索源。
+    - 新建：分类名作为搜索源名，关键词填入 query_baidu（百度+豆包共用）
+    - 更新：同名搜索源仅更新关键词，保留用户配置的其他字段
+    - 子分类名带父前缀（如「半导体/存储芯片」）避免重名歧义
+    """
+    try:
+        created, updated, messages = sync_stock_categories_to_sources(
+            engines=engines, max_results=max_results)
+        return {
+            "success": True,
+            "created": created,
+            "updated": updated,
+            "total_categories": created + updated,
+            "messages": messages,
+        }
+    except Exception as e:
+        logger.error("投资分类同步失败: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stock-categories/preview", summary="预览投资分类关键词（不入库）")
+async def preview_stock_categories():
+    """预览从 stock_investment_category 提取的关键词，不写入数据库"""
+    try:
+        cats = fetch_stock_categories()
+        return {"total": len(cats), "categories": cats}
+    except Exception as e:
+        logger.error("读取投资分类失败: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/sources/{source_id}", summary="更新搜索源")

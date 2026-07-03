@@ -17,6 +17,25 @@ from utils import db_manager
 logger = logging.getLogger(__name__)
 
 
+# ── 列裁剪常量 ───────────────────────────────────────────
+# articles 表的 content / plain_content 是 MEDIUMTEXT 全文字段（单篇可达数十 KB）。
+# 在公网 MySQL 上，SELECT * 会把这些大字段全部回传再由 pymysql 解码，是列表查询
+# 慢的主因（基准测试：SELECT * LIMIT 20 ≈ 1182ms / 968KB；列裁剪后 ≈ 14ms / 2.6KB）。
+# 因此列表/聚合类查询一律显式列举所需列，避免 SELECT *。
+
+# RSS 流（_build_item_xml）用到的列：用到 content 全文，但不用 plain_content
+ARTICLE_COLS_RSS = (
+    "id, fakeid, aid, title, link, digest, cover, author, content, "
+    "publish_time, fetched_at, source"
+)
+
+# 常规列表展示列：不含 content / plain_content 全文
+ARTICLE_COLS_LIST = (
+    "id, fakeid, aid, title, link, digest, cover, author, "
+    "publish_time, fetched_at, source"
+)
+
+
 def _safe_create_index(conn, index_name: str, table_name: str, columns: str):
     """安全创建索引（兼容 SQLite 和 MySQL）"""
     if db_manager.USE_MYSQL:
@@ -346,9 +365,10 @@ def save_articles(fakeid: str, articles: List[Dict], source: str = "poll") -> in
 def get_articles(fakeid: str, limit: int = 20) -> List[Dict]:
     conn = db_manager.get_conn()
     try:
+        # 列裁剪：去掉 plain_content 全文，避免 SELECT * 回传大字段
         return db_manager.fetchall(
             conn,
-            "SELECT * FROM articles WHERE fakeid=? "
+            f"SELECT {ARTICLE_COLS_RSS} FROM articles WHERE fakeid=? "
             "ORDER BY publish_time DESC LIMIT ?",
             (fakeid, limit),
         )
@@ -363,9 +383,10 @@ def get_regular_articles(fakeid: str, limit: int = 50) -> List[Dict]:
     """
     conn = db_manager.get_conn()
     try:
+        # 列裁剪：去掉 plain_content 全文，避免 SELECT * 回传大字段
         return db_manager.fetchall(
             conn,
-            "SELECT * FROM articles WHERE fakeid=? AND source='poll' "
+            f"SELECT {ARTICLE_COLS_RSS} FROM articles WHERE fakeid=? AND source='poll' "
             "ORDER BY publish_time DESC LIMIT ?",
             (fakeid, limit),
         )
@@ -380,9 +401,11 @@ def get_historical_articles(fakeid: str, limit: int = 500, offset: int = 0) -> L
     """
     conn = db_manager.get_conn()
     try:
+        # 列裁剪：仅取 RSS 展示用列（含 content，去掉 plain_content 全文）。
+        # 默认 limit=500，SELECT * 会回传 500 篇全文，是历史 RSS 慢的主因。
         return db_manager.fetchall(
             conn,
-            "SELECT * FROM articles WHERE fakeid=? AND source='deep_fetch' "
+            f"SELECT {ARTICLE_COLS_RSS} FROM articles WHERE fakeid=? AND source='deep_fetch' "
             "ORDER BY publish_time DESC LIMIT ? OFFSET ?",
             (fakeid, limit, offset),
         )
@@ -442,12 +465,14 @@ def get_all_articles(limit: int = 50) -> List[Dict]:
         placeholders = ",".join("?" * len(fakeid_list))
 
         # 使用窗口函数：每个订阅号最多 N 篇，总共最多 M 篇
+        # 列裁剪：仅取 RSS 展示用列（含 content 供 _build_item_xml，去掉 plain_content 全文），
+        # 避免把大量 MEDIUMTEXT 经公网回传（SELECT * 时此查询可慢一个数量级）。
         rows = db_manager.fetchall(
             conn,
             f"""
             WITH ranked_articles AS (
                 SELECT
-                    *,
+                    {ARTICLE_COLS_RSS},
                     ROW_NUMBER() OVER (
                         PARTITION BY fakeid
                         ORDER BY publish_time DESC
@@ -804,12 +829,13 @@ def get_articles_by_category(category_id: int, limit: int = 50) -> List[Dict]:
         placeholders = ",".join("?" * len(fakeid_list))
 
         # 使用窗口函数：每个订阅号最多 N 篇，总共最多 M 篇
+        # 列裁剪：仅取 RSS 展示用列（含 content 供 _build_item_xml，去掉 plain_content 全文）
         return db_manager.fetchall(
             conn,
             f"""
             WITH ranked_articles AS (
                 SELECT
-                    *,
+                    {ARTICLE_COLS_RSS},
                     ROW_NUMBER() OVER (
                         PARTITION BY fakeid
                         ORDER BY publish_time DESC
