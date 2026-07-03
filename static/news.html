@@ -268,6 +268,7 @@
                     <h2>搜索源列表</h2>
                     <div style="display:flex;gap:8px;">
                         <button class="btn-sm btn-success" onclick="syncStockCategories()">🔄 从投资分类同步</button>
+                        <button class="btn-sm btn-primary" id="btnBatchSearch" onclick="batchSearchAll()">🔍 批量检索</button>
                         <button class="btn-sm btn-primary" onclick="openSourceModal()">+ 新建搜索源</button>
                     </div>
                 </div>
@@ -557,6 +558,27 @@
                 if (item.key_name === 'tavily_api_key' && item.value) _apiKeysConfigured.tavily = true;
             });
         } catch(e) {}
+    }
+
+    async function batchSearchAll() {
+        var btn = document.getElementById('btnBatchSearch');
+        if (!confirm('批量检索所有开启状态的搜索源？\n（百度+豆包+Tavily，按各自关键词搜索，耗时较长）')) return;
+        btn.disabled = true;
+        btn.textContent = '检索中...';
+        try {
+            var res = await fetch('/api/news/trigger', { method: 'POST' });
+            var d = await res.json();
+            if (d.success) {
+                showToastSuccess(d.message || ('检索完成：' + d.sources + ' 个源，新增 ' + d.saved + ' 条'));
+            } else {
+                showToastError('检索失败: ' + (d.detail || '未知错误'));
+            }
+        } catch (e) {
+            showToastError('检索失败: ' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '🔍 批量检索';
+        }
     }
 
     async function syncStockCategories() {

@@ -459,8 +459,24 @@ def run_search_cycle(log: Optional[Callable[[str], None]] = None):
                     saved += news_store.save_news_items(source_id, items, "doubao")
 
         if "tavily" in engines:
+            # Tavily 搜索 API（用 query_tavily 关键词）
+            query = source.get("query_tavily", "")
+            if query:
+                topic = source.get("tavily_topic", "news")
+                days = source.get("tavily_days", 7)
+                items = fetch_tavily(query, topic=topic, days=days, max_results=max_results)
+                if items:
+                    saved += news_store.save_news_items(source_id, items, "tavily")
+
+        if "aihot" in engines:
+            query = source.get("query_aihot", "")
+            aihot_mode = source.get("aihot_mode", "selected")
+            items = fetch_aihot(query=query, mode=aihot_mode, max_results=max_results)
+            if items:
+                saved += news_store.save_news_items(source_id, items, "aihot")
+
+        if "newsnow" in engines:
             # newsnow 抓取多平台热榜（不需要 query，直接抓全量）
-            # query_newsnow 字段存平台列表（逗号分隔），空则用默认10个平台
             platforms_str = source.get("query_aihot", "")  # 复用 query_aihot 字段存平台列表
             if platforms_str and platforms_str.strip():
                 platforms = [p.strip() for p in platforms_str.split(",") if p.strip()]

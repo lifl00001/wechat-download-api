@@ -378,12 +378,158 @@
 
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ── 分组 + 瀑布卡片 ──────────────────────────────── */
+
+        .sub-groups { display: flex; flex-direction: column; gap: var(--space-lg); }
+
+        .sub-group {
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-large);
+            overflow: hidden;
+        }
+
+        .sub-group-header {
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+            padding: 12px var(--space-md);
+            background: var(--bg-secondary);
+            cursor: pointer;
+            user-select: none;
+            transition: background var(--duration-fast) var(--ease-in-out);
+        }
+        .sub-group-header:hover { background: var(--border-light); }
+
+        .sub-group-header .color-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            flex-shrink: 0;
+        }
+
+        .sub-group-header .group-name {
+            font-size: var(--font-base);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .sub-group-header .group-count {
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+            background: var(--bg-primary);
+            padding: 2px 10px;
+            border-radius: 10px;
+            border: 1px solid var(--border-light);
+        }
+
+        .sub-group-header .toggle-arrow {
+            margin-left: auto;
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+            transition: transform var(--duration-normal) var(--ease-in-out);
+        }
+        .sub-group.collapsed .toggle-arrow { transform: rotate(-90deg); }
+        .sub-group.collapsed .card-grid { display: none; }
+
+        /* 卡片网格：自适应列 */
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+            gap: var(--space-md);
+            padding: var(--space-md);
+        }
+
+        /* 竖向卡片 */
+        .sub-card {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-base);
+            padding: var(--space-md) var(--space-sm);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            transition: box-shadow var(--duration-fast) var(--ease-in-out),
+                        border-color var(--duration-fast) var(--ease-in-out);
+        }
+        .sub-card:hover {
+            border-color: var(--primary-color);
+            box-shadow: var(--shadow-base);
+        }
+
+        .sub-card .card-avatar {
+            width: 56px; height: 56px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: var(--border-light);
+            flex-shrink: 0;
+        }
+
+        .sub-card .card-name {
+            font-size: var(--font-sm);
+            font-weight: 600;
+            text-align: center;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .sub-card .card-meta {
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .sub-card .card-category {
+            width: 100%;
+            padding: 3px 6px;
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-small);
+            font-size: var(--font-xs);
+            color: var(--text-secondary);
+            outline: none;
+            background: var(--bg-primary);
+            cursor: pointer;
+        }
+        .sub-card .card-category:hover, .sub-card .card-category:focus {
+            border-color: var(--primary-color);
+        }
+
+        .sub-card .card-actions {
+            display: flex;
+            gap: 4px;
+            width: 100%;
+            margin-top: 4px;
+        }
+
+        .sub-card .card-actions button {
+            flex: 1;
+            padding: 4px 0;
+            border-radius: var(--radius-small);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid var(--border-base);
+            background: transparent;
+            color: var(--text-secondary);
+            transition: all var(--duration-fast) var(--ease-in-out);
+            white-space: nowrap;
+        }
+        .sub-card .card-actions .act-rss:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .sub-card .card-actions .act-history {
+            border-color: #fcd34d; color: #92400e; background: #fffbeb;
+        }
+        .sub-card .card-actions .act-history:hover { background: #fef3c7; }
+        .sub-card .card-actions .act-unsub:hover { border-color: var(--error-color); color: var(--error-color); }
+
         @media (max-width: 768px) {
             .layout { padding: var(--space-lg) var(--space-md); }
             .header { flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
             .status-bar { flex-direction: column; gap: var(--space-sm); }
             .sub-item { flex-direction: column; align-items: flex-start; }
             .sub-item-actions { width: 100%; }
+            .card-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-sm); }
         }
     </style>
 </head>
@@ -505,39 +651,90 @@
                     return;
                 }
                 updateAggRssBar(true);
-                var html = '<ul class="sub-list">';
-                d.data.forEach(function(s) {
-                    var lastPoll = s.last_poll ? new Date(s.last_poll * 1000).toLocaleString('zh-CN') : '从未';
-                    html += '<li><div class="sub-item">';
-                    html += '<img src="' + (s.head_img || '') + '" alt="" onerror="this.style.display=\'none\'">';
-                    html += '<div class="sub-item-info">';
-                    html += '<div class="name">' + escHtml(s.nickname || s.fakeid) + '</div>';
-                    html += '<div class="sub-item-meta">';
-                    html += '<span>' + s.article_count + ' 篇文章</span>';
-                    html += '<span>最后轮询: ' + lastPoll + '</span>';
-                    if (s.category_name) html += '<span style="color:var(--primary-color);">' + escHtml(s.category_name) + '</span>';
-                    html += '</div></div>';
-                    html += '<div class="sub-item-actions">';
-                    html += '<select class="btn-category" onchange="setCategory(\'' + escAttr(s.fakeid) + '\', this.value)">';
-                    html += '<option value="">分类</option>';
-                    categoriesCache.forEach(function(cat) {
-                        var sel = s.category_id === cat.id ? ' selected' : '';
-                        html += '<option value="' + cat.id + '"' + sel + '>' + escHtml(cat.name) + '</option>';
-                    });
-                    html += '</select>';
-                    html += '<button class="btn-copy" onclick="copyRss(\'' + escAttr(s.rss_url) + '\')">复制 RSS</button>';
-                    if (s.historical_count > 0) {
-                        html += '<button class="btn-copy" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;" onclick="copyRss(\'' + escAttr(s.historical_rss_url) + '\')" title="历史文章 ' + s.historical_count + ' 篇">历史 RSS</button>';
-                    }
-                    html += '<button class="btn-unsub" onclick="doUnsub(\'' + escAttr(s.fakeid) + '\')">取消</button>';
-                    html += '</div></div></li>';
+                var subs = d.data;
+
+                // 按分类分组：category_id 为空/0 的归入"未分组"
+                var groups = {};
+                subs.forEach(function(s) {
+                    var cid = s.category_id || 0;
+                    if (!groups[cid]) groups[cid] = [];
+                    groups[cid].push(s);
                 });
-                html += '</ul>';
+
+                var html = '<div class="sub-groups">';
+
+                // 先渲染有分类的分组（按 categoriesCache 顺序）
+                categoriesCache.forEach(function(cat) {
+                    var list = groups[cat.id];
+                    if (!list || list.length === 0) return;
+                    var color = cat.color || 'var(--primary-color)';
+                    html += '<div class="sub-group">';
+                    html += '<div class="sub-group-header" onclick="toggleGroup(this)">';
+                    html += '<span class="color-dot" style="background:' + color + '"></span>';
+                    html += '<span class="group-name">' + escHtml(cat.name) + '</span>';
+                    html += '<span class="group-count">' + list.length + '</span>';
+                    html += '<span class="toggle-arrow">▼</span>';
+                    html += '</div>';
+                    html += renderCardGrid(list);
+                    html += '</div>';
+                });
+
+                // 最后渲染"未分组"
+                if (groups[0] && groups[0].length > 0) {
+                    html += '<div class="sub-group">';
+                    html += '<div class="sub-group-header" onclick="toggleGroup(this)">';
+                    html += '<span class="color-dot" style="background:var(--text-muted)"></span>';
+                    html += '<span class="group-name">未分组</span>';
+                    html += '<span class="group-count">' + groups[0].length + '</span>';
+                    html += '<span class="toggle-arrow">▼</span>';
+                    html += '</div>';
+                    html += renderCardGrid(groups[0]);
+                    html += '</div>';
+                }
+
+                html += '</div>';
                 el.innerHTML = html;
             } catch (e) {
                 el.innerHTML = '<div class="sub-empty">加载失败: ' + e.message + '</div>';
                 updateAggRssBar(false);
             }
+        }
+
+        function renderCardGrid(list) {
+            var html = '<div class="card-grid">';
+            list.forEach(function(s) {
+                var lastPoll = s.last_poll
+                    ? new Date(s.last_poll * 1000).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})
+                    : '从未';
+                html += '<div class="sub-card">';
+                html += '<img class="card-avatar" src="' + (s.head_img || '') + '" alt="" onerror="this.style.display=\'none\'">';
+                html += '<div class="card-name" title="' + escAttr(s.nickname || '') + '">' + escHtml(s.nickname || s.fakeid) + '</div>';
+                html += '<div class="card-meta">' + s.article_count + ' 篇 · ' + lastPoll + '</div>';
+                // 分类选择器
+                html += '<select class="card-category" onchange="setCategory(\'' + escAttr(s.fakeid) + '\', this.value)">';
+                html += '<option value="">分类...</option>';
+                categoriesCache.forEach(function(cat) {
+                    var sel = s.category_id === cat.id ? ' selected' : '';
+                    html += '<option value="' + cat.id + '"' + sel + '>' + escHtml(cat.name) + '</option>';
+                });
+                html += '</select>';
+                // 操作按钮
+                html += '<div class="card-actions">';
+                html += '<button class="act-rss" onclick="copyRss(\'' + escAttr(s.rss_url) + '\')">RSS</button>';
+                if (s.historical_count > 0) {
+                    html += '<button class="act-history" onclick="copyRss(\'' + escAttr(s.historical_rss_url) + '\')" title="历史文章 ' + s.historical_count + ' 篇">历史</button>';
+                }
+                html += '<button class="act-unsub" onclick="doUnsub(\'' + escAttr(s.fakeid) + '\')">取消</button>';
+                html += '</div>';
+                html += '</div>';
+            });
+            html += '</div>';
+            return html;
+        }
+
+        function toggleGroup(headerEl) {
+            var group = headerEl.parentElement;
+            group.classList.toggle('collapsed');
         }
 
         async function setCategory(fakeid, categoryId) {
