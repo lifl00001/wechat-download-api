@@ -116,7 +116,7 @@ def _get_parent_label(cat: Dict, all_cats: List[Dict]) -> str:
 
 def sync_stock_categories_to_sources(
     engines: str = '["baidu","doubao","tavily"]',
-    max_results: int = 10,
+    max_results: int = 20,
 ) -> Tuple[int, int, List[str]]:
     """
     同步 stock_investment_category 到 news_sources。
