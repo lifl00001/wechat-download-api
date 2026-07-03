@@ -1,40 +1,19 @@
 @echo off
 chcp 65001 > nul
 
-:: ========================================================
-:: 安装为 Windows 计划任务，实现开机自动启动
-:: 请以"管理员身份"运行此脚本
-:: ========================================================
+:: Launcher: runs the PowerShell installer with bypass policy
+:: All real logic is in setup_startup_task.ps1 (which auto-elevates via UAC)
 
-cd /d "D:\studyspace\wechat-download-api"
+cd /d "%~dp0"
 
-set "TASK_NAME=WeChatDownloadAPI_AutoStart"
-set "PROJECT_DIR=D:\studyspace\wechat-download-api"
-set "VBS_PATH=%PROJECT_DIR%\startup.vbs"
+echo Launching PowerShell installer (will request UAC elevation)...
+echo.
+echo A UAC prompt may appear. Click "Yes" to approve.
+echo.
 
-:: 删除旧任务（如果存在）
-schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>&1
-
-:: 创建新任务：用户登录时自动启动，使用最高权限，隐藏窗口
-schtasks /Create ^
-    /TN "%TASK_NAME%" ^
-    /TR "wscript.exe \"%VBS_PATH%\"" ^
-    /SC ONLOGON ^
-    /RL HIGHEST ^
-    /F
-
-if errorlevel 1 (
-    echo.
-    echo [ERROR] 创建计划任务失败，请确认是否以管理员身份运行。
-    pause
-    exit /b 1
-)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_startup_task.ps1"
 
 echo.
-echo [OK] 计划任务 "%TASK_NAME%" 创建成功！
-echo 下次登录 Windows 时将自动在后台启动 WeChat Download API 服务。
-echo 服务日志：%PROJECT_DIR%\logs\startup.log
+echo Installer finished. Check log: logs\setup_task.log
 echo.
-echo 如需取消开机启动，运行以下命令：
-echo   schtasks /Delete /TN "%TASK_NAME%" /F
 pause

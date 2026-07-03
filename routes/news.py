@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from utils import news_store
-from utils.news_fetcher import news_searcher, run_single_source_search, fetch_baidu, fetch_tavily, fetch_aihot, fetch_single_item_content
+from utils.news_fetcher import news_searcher, run_single_source_search, fetch_baidu, fetch_doubao, fetch_tavily, fetch_aihot, fetch_single_item_content
 from utils.settings_manager import settings_manager
 
 logger = logging.getLogger(__name__)
@@ -131,12 +131,15 @@ async def search_single_source(source_id: int):
 
     # 检查 API Key 配置
     baidu_key = settings_manager.get("baidu_api_key")
+    doubao_key = settings_manager.get("doubao_api_key")
     tavily_key = settings_manager.get("tavily_api_key")
     import json as _json
     engines = _json.loads(source.get("search_engines", '["baidu","tavily"]'))
     missing_keys = []
     if "baidu" in engines and not baidu_key:
         missing_keys.append("百度")
+    if "doubao" in engines and not doubao_key:
+        missing_keys.append("豆包")
     if "tavily" in engines and not tavily_key:
         missing_keys.append("Tavily")
     if missing_keys:
@@ -172,6 +175,11 @@ async def one_time_search(req: OneTimeSearchRequest):
             items = fetch_baidu(req.query, recency=req.baidu_recency, max_results=req.max_results)
             for item in items:
                 item["source_engine"] = "baidu"
+            results.extend(items)
+        elif engine == "doubao":
+            items = fetch_doubao(req.query, max_results=req.max_results)
+            for item in items:
+                item["source_engine"] = "doubao"
             results.extend(items)
         elif engine == "tavily":
             items = fetch_tavily(req.query, topic=req.tavily_topic,

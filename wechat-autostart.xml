@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+  WeChat Download API AutoStart Task Definition
+  - BootTrigger: start at boot (before login) as SYSTEM
+  - LogonTrigger: start at logon
+  - RestartOnFailure: auto-restart 3 times, 1 min apart
+  Register: right-click setup_startup_task.bat -> Run as administrator
+  Unregister: schtasks /Delete /TN WeChatDownloadAPI_AutoStart /F
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>WeChat Download API AutoStart with auto-restart on failure</Description>
+    <URI>\WeChatDownloadAPI_AutoStart</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>SYSTEM</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c start "" /b "__BAT_PATH__"</Arguments>
+      <WorkingDirectory>__PROJECT_DIR__</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

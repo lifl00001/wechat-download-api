@@ -24,12 +24,15 @@ import requests
 
 from utils import news_store
 from utils.settings_manager import settings_manager
+from utils.newsnow_fetcher import fetch_newsnow
+from utils.douyin_fetcher import fetch_douyin_hot_topics
 
 logger = logging.getLogger(__name__)
 
 # HTTP 超时配置
 _BAIDU_TIMEOUT = 30
 _TAVILY_TIMEOUT = 60
+_DOUBAO_TIMEOUT = 30
 _FETCH_TIMEOUT = 15
 _FETCH_CONCURRENCY = 4  # 并发抓取全文的线程数
 
@@ -217,6 +220,71 @@ def fetch_baidu(query: str, recency: str = "week", max_results: int = 10) -> Lis
         return []
 
 
+def fetch_doubao(query: str, max_results: int = 10) -> List[Dict]:
+    """
+    调用豆包/火山引擎联网搜索 API（Custom 版 web 搜索）
+    返回标准化的新闻列表（Content 字段含完整正文，Summary 含相关性摘要）
+    """
+    api_key = settings_manager.get("doubao_api_key")
+    if not api_key:
+        logger.warning("Doubao API key not configured")
+        return []
+
+    try:
+        resp = requests.post(
+            "https://open.feedcoopapi.com/search_api/web_search",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "Query": query,
+                "SearchType": "web",
+                "Count": min(max_results, 50),  # 接口上限 50 条
+                "NeedSummary": True,
+                "TimeRange": "OneWeek",
+                "Filter": {"NeedUrl": True},
+            },
+            timeout=_DOUBAO_TIMEOUT,
+        )
+        data = resp.json()
+
+        # 错误响应：ResponseMetadata.Error.CodeN 存在表示失败
+        meta = data.get("ResponseMetadata", {}) or {}
+        err = meta.get("Error")
+        if err:
+            logger.error("Doubao API error: %s", err.get("Message", err.get("CodeN", "")))
+            return []
+
+        result = data.get("Result", {}) or {}
+        web_results = result.get("WebResults", []) or []
+
+        results = []
+        for ref in web_results:
+            # Summary 是与 query 相关的正文片段（500~1000字），优于 Snippet
+            summary = ref.get("Summary", "") or ref.get("Snippet", "")
+            content = ref.get("Content", "") or summary
+            results.append({
+                "title": ref.get("Title", ""),
+                "url": ref.get("Url", ""),
+                "snippet": summary[:500],
+                "full_text": content,
+                "published_date": ref.get("PublishTime", ""),
+                "author": ref.get("SiteName", ""),
+                "score": ref.get("RankScore", 0) or 0,
+            })
+
+        logger.info("Doubao search '%s' returned %d results", query[:30], len(results))
+        return results
+
+    except requests.exceptions.Timeout:
+        logger.error("Doubao API timeout for query: %s", query[:30])
+        return []
+    except Exception as e:
+        logger.error("Doubao API error: %s", e)
+        return []
+
+
 def fetch_tavily(query: str, topic: str = "news", days: int = 7,
                  max_results: int = 10, include_raw: bool = True) -> List[Dict]:
     """
@@ -382,22 +450,37 @@ def run_search_cycle(log: Optional[Callable[[str], None]] = None):
                 if items:
                     saved += news_store.save_news_items(source_id, items, "baidu")
 
-        if "tavily" in engines:
-            query = source.get("query_tavily", "")
+        if "doubao" in engines:
+            # 豆包/火山引擎联网搜索，复用百度关键词
+            query = source.get("query_baidu", "")
             if query:
-                topic = source.get("tavily_topic", "news")
-                days = source.get("tavily_days", 7)
-                items = fetch_tavily(query, topic=topic, days=days, max_results=max_results)
+                items = fetch_doubao(query, max_results=max_results)
                 if items:
-                    saved += news_store.save_news_items(source_id, items, "tavily")
+                    saved += news_store.save_news_items(source_id, items, "doubao")
 
-        if "aihot" in engines:
-            query = source.get("query_aihot", "")
-            aihot_mode = source.get("aihot_mode", "selected")
-            # AI HOT 不强制要求 query，空 query = 拉全部
-            items = fetch_aihot(query=query, mode=aihot_mode, max_results=max_results)
+        if "tavily" in engines:
+            # newsnow 抓取多平台热榜（不需要 query，直接抓全量）
+            # query_newsnow 字段存平台列表（逗号分隔），空则用默认10个平台
+            platforms_str = source.get("query_aihot", "")  # 复用 query_aihot 字段存平台列表
+            if platforms_str and platforms_str.strip():
+                platforms = [p.strip() for p in platforms_str.split(",") if p.strip()]
+                items = fetch_newsnow(sources=platforms, max_per_source=max_results)
+            else:
+                items = fetch_newsnow(max_per_source=max_results)
             if items:
-                saved += news_store.save_news_items(source_id, items, "aihot")
+                # newsnow 的每个平台用不同的 source_engine，需要分组保存
+                from collections import defaultdict
+                by_engine = defaultdict(list)
+                for item in items:
+                    by_engine[item["source_engine"]].append(item)
+                for engine_name, engine_items in by_engine.items():
+                    saved += news_store.save_news_items(source_id, engine_items, engine_name)
+
+        if "douyin" in engines:
+            # 抖音创作者中心热门话题（CDP方式）
+            items = fetch_douyin_hot_topics(max_results=max_results)
+            if items:
+                saved += news_store.save_news_items(source_id, items, "douyin_creator")
 
         total_saved += saved
         elapsed = time.time() - src_start
@@ -427,6 +510,14 @@ def run_single_source_search(source_id: int) -> int:
             if items:
                 saved += news_store.save_news_items(source_id, items, "baidu")
 
+    if "doubao" in engines:
+        # 豆包/火山引擎联网搜索，复用百度关键词
+        query = source.get("query_baidu", "")
+        if query:
+            items = fetch_doubao(query, max_results=max_results)
+            if items:
+                saved += news_store.save_news_items(source_id, items, "doubao")
+
     if "tavily" in engines:
         query = source.get("query_tavily", "")
         if query:
@@ -442,6 +533,26 @@ def run_single_source_search(source_id: int) -> int:
         items = fetch_aihot(query=query, mode=aihot_mode, max_results=max_results)
         if items:
             saved += news_store.save_news_items(source_id, items, "aihot")
+
+    if "newsnow" in engines:
+        platforms_str = source.get("query_aihot", "")
+        if platforms_str and platforms_str.strip():
+            platforms = [p.strip() for p in platforms_str.split(",") if p.strip()]
+            items = fetch_newsnow(sources=platforms, max_per_source=max_results)
+        else:
+            items = fetch_newsnow(max_per_source=max_results)
+        if items:
+            from collections import defaultdict
+            by_engine = defaultdict(list)
+            for item in items:
+                by_engine[item["source_engine"]].append(item)
+            for engine_name, engine_items in by_engine.items():
+                saved += news_store.save_news_items(source_id, engine_items, engine_name)
+
+    if "douyin" in engines:
+        items = fetch_douyin_hot_topics(max_results=max_results)
+        if items:
+            saved += news_store.save_news_items(source_id, items, "douyin_creator")
 
     return saved
 

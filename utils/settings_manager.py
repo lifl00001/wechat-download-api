@@ -42,6 +42,7 @@ DEFAULT_SETTINGS = [
     ("webhook_url", "WEBHOOK_URL", "", "Webhook通知地址（企业微信群机器人等）"),
     ("webhook_notification_interval", "WEBHOOK_NOTIFICATION_INTERVAL", "300", "同一事件通知最小间隔（秒）"),
     ("baidu_api_key", "BAIDU_API_KEY", "", "百度千帆 API Key"),
+    ("doubao_api_key", "DOUBAO_API_KEY", "", "豆包/火山引擎联网搜索 API Key"),
     ("tavily_api_key", "TAVILY_API_KEY", "", "Tavily API Key"),
     ("news_search_interval", "NEWS_SEARCH_INTERVAL", "21600", "新闻搜索间隔（秒），默认6小时"),
     ("news_scheduled_time", "NEWS_SCHEDULED_TIME", "", "新闻定时执行时间（HH:MM格式，如07:00），留空则按间隔执行"),

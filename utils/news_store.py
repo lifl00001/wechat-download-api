@@ -12,10 +12,92 @@
 import time
 import hashlib
 import logging
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import List, Dict, Optional
 from utils import db_manager
 
 logger = logging.getLogger(__name__)
+
+
+def parse_date_to_ts(published_date: str) -> int:
+    """
+    把 published_date 字符串解析成 Unix 时间戳（秒）。
+
+    支持的格式（按匹配顺序）：
+      1. RFC822 / RFC1123：'Mon, 15 Jun 2026 00:02:43 GMT'（tavily 返回这种）
+         —— 用 email.utils.parsedate_to_datetime，正确处理 GMT/时区偏移，
+            解析结果按 UTC 解释，避免本地时区带来的 8 小时偏差。
+      2. ISO8601：'2026-06-15T00:02:43' / '2026-06-15T00:02:43Z'
+      3. 标准：'2026-06-15 00:02:43' / '2026-06-15'
+
+    解析失败返回 0（调用方据此决定是否保留为空）。
+    """
+    if not published_date or not isinstance(published_date, str):
+        return 0
+    s = published_date.strip()
+    if not s:
+        return 0
+
+    # 1) RFC822 / RFC1123（带星期/月份缩写，常见于 HTTP/RSS/tavily）
+    #    特征：含逗号或含 GMT/Z 时区标记
+    if "," in s or "GMT" in s or s.endswith("Z") and "T" not in s:
+        try:
+            dt = parsedate_to_datetime(s)
+            if dt is not None:
+                # parsedate_to_datetime 对 naive 结果按本地时区解释，需统一为 UTC 时间戳
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return int(dt.timestamp())
+        except (TypeError, ValueError):
+            pass
+
+    # 2) ISO8601 / 标准日期：截取前19位逐格式尝试
+    head = s[:19]
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(head, fmt)
+            # 无时区信息时按本地时区解释（与历史数据行为一致）
+            return int(dt.timestamp())
+        except ValueError:
+            continue
+
+    return 0
+
+
+def normalize_published_date(published_date: str, published_ts: int = 0) -> str:
+    """
+    把 published_date 归一化成统一的本地时间字符串：'YYYY-MM-DD HH:MM:SS'。
+
+    规则（保证 published_date 与 published_ts 始终一致）：
+      - 若已有 published_ts（>0），直接用它格式化 → 最可靠
+      - 否则用 parse_date_to_ts() 从字符串解析出 ts 再格式化
+      - 解析失败（ts=0）则原样返回（保留原始信息，不丢失）
+
+    处理的输入格式：
+      - RFC822：'Mon, 15 Jun 2026 00:02:43 GMT'  → '2026-06-15 08:02:43'
+      - ISO8601：'2026-06-15T00:02:43'           → '2026-06-15 00:02:43'
+      - 仅日期：'2026-06-15'                      → '2026-06-15 00:00:00'
+      - 已标准：'2026-06-15 00:02:43'             → 原样返回
+    """
+    if not published_date or not isinstance(published_date, str):
+        return ""
+
+    s = published_date.strip()
+    if not s:
+        return ""
+
+    # 已经是目标格式（标准 YYYY-MM-DD HH:MM:SS），直接返回
+    if len(s) == 19 and s[4] == "-" and s[7] == "-" and s[10] == " " and s[13] == ":" and s[16] == ":":
+        return s
+
+    # 优先用现成的 ts（更可靠），否则从字符串解析
+    ts = published_ts if published_ts and published_ts > 0 else parse_date_to_ts(s)
+    if ts > 0:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+
+    # 都失败：原样返回（保留原始信息便于排查）
+    return s
 
 
 def _safe_create_index(conn, index_name: str, table_name: str, columns: str):
@@ -72,7 +154,7 @@ def init_news_db():
                 CREATE TABLE IF NOT EXISTS news_items (
                     id              INT AUTO_INCREMENT PRIMARY KEY,
                     source_id       INT NOT NULL,
-                    title           VARCHAR(500) NOT NULL DEFAULT '',
+                    title           TEXT NOT NULL,
                     url             TEXT NOT NULL,
                     snippet         TEXT NOT NULL,
                     full_text       MEDIUMTEXT NOT NULL,
@@ -319,20 +401,15 @@ def save_news_items(source_id: int, items: List[Dict], engine: str) -> int:
             published_date = item.get("published_date", item.get("date", ""))
             relevance_score = float(item.get("score", 0) or 0)
 
-            # 解析 published_ts
+            # 解析 published_ts（支持 RFC822/ISO8601/标准日期，解析失败为 0）
             published_ts = item.get("published_ts", 0)
             if not published_ts and published_date:
-                try:
-                    from datetime import datetime
-                    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                        try:
-                            dt = datetime.strptime(published_date[:19], fmt)
-                            published_ts = int(dt.timestamp())
-                            break
-                        except ValueError:
-                            continue
-                except Exception:
-                    pass
+                published_ts = parse_date_to_ts(published_date)
+
+            # 归一化 published_date 为统一的 'YYYY-MM-DD HH:MM:SS' 本地时间格式
+            # （基于已解析的 ts，保证 date 与 ts 始终一致）
+            if published_date:
+                published_date = normalize_published_date(published_date, published_ts)
 
             try:
                 if db_manager.USE_MYSQL:
@@ -350,6 +427,10 @@ def save_news_items(source_id: int, items: List[Dict], engine: str) -> int:
                     """, (source_id, title, url, snippet, full_text, engine,
                           source_name, author, published_date, published_ts,
                           relevance_score, category_id, url_hash, now))
+                    # MySQL strict 模式下，单条失败会让连接进入 rollback-only 状态，
+                    # 若不立即 rollback 清除污染，最终整批 commit 实际是回滚，
+                    # 导致"前台显示搜索成功，实际一条都没入库"。
+                    db_manager.commit(conn)
                 else:
                     db_manager.execute(conn, """
                         INSERT INTO news_items
@@ -365,15 +446,17 @@ def save_news_items(source_id: int, items: List[Dict], engine: str) -> int:
                     """, (source_id, title, url, snippet, full_text, engine,
                           source_name, author, published_date, published_ts,
                           relevance_score, category_id, url_hash, now))
+                    db_manager.commit(conn)
                 saved += 1
             except db_manager.IntegrityError:
-                pass
+                db_manager.rollback(conn)
             except Exception as e:
+                # 单条失败立即回滚，清除 rollback-only 污染状态，
+                # 让后续条目可继续写入（关键修复点）
+                db_manager.rollback(conn)
                 logger.warning("Failed to save news item %s: %s", url[:80], e)
 
-        db_manager.commit(conn)
-
-        # 更新 source 的 last_search_at
+        # 更新 source 的 last_search_at（独立于条目保存，单独提交）
         db_manager.execute(conn,
             "UPDATE news_sources SET last_search_at = ? WHERE id = ?",
             (now, source_id))

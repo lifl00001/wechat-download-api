@@ -303,6 +303,19 @@ def commit(conn):
     conn.commit()
 
 
+def rollback(conn):
+    """回滚事务，清除连接的 rollback-only 污染状态。
+
+    MySQL strict 模式下，事务内某条 INSERT 触发 DataError（如字段超长）后，
+    整个连接进入 rollback-only 状态，此时即使后续语句成功，最终 commit() 也会回滚。
+    在批量保存循环中，单条失败需立即 rollback 清除该状态，否则整批数据丢失。
+    """
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
 def total_changes(conn) -> int:
     """获取最近一次操作影响的行数"""
     if USE_MYSQL:

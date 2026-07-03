@@ -5,7 +5,7 @@ chcp 65001 > nul
 :: 该脚本由 startup.vbs 调用，启动后不显示命令行窗口
 :: 也可以单独通过 "start /min start_hidden.bat" 最小化运行
 
-cd /d "D:\studyspace\wechat-download-api"
+cd /d "E:\workspace\wechat-download-api"
 
 :: 确保日志目录存在
 if not exist "logs" mkdir "logs"

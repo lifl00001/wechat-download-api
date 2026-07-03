@@ -6,5 +6,5 @@
 '   3. 日志查看：项目目录下 logs\startup.log
 
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run chr(34) & "D:\studyspace\wechat-download-api\start_hidden.bat" & Chr(34), 0, False
+WshShell.Run chr(34) & "E:\workspace\wechat-download-api\start_hidden.bat" & Chr(34), 0, False
 Set WshShell = Nothing

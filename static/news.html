@@ -116,6 +116,7 @@
         .engine-tag.baidu { background: #e6f7ff; color: #1890ff; }
         .engine-tag.tavily { background: #f6ffed; color: #52c41a; }
         .engine-tag.aihot { background: #fff7e6; color: #fa8c16; }
+        .engine-tag.doubao { background: #f9f0ff; color: #722ed1; }
 
         .toggle-switch {
             position: relative; width: 36px; height: 20px; background: var(--border-base);
@@ -285,7 +286,7 @@
             </div>
             <div class="section">
                 <h2>API Key 配置</h2>
-                <p style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:var(--space-md);">百度和 Tavily 的 API Key 是搜索的必要条件，请先配置后再使用。</p>
+                <p style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:var(--space-md);">百度、豆包和 Tavily 的 API Key 是搜索的必要条件，请先配置后再使用。</p>
                 <div class="form-group">
                     <label>百度千帆 API Key</label>
                     <div style="display:flex;gap:8px;align-items:center;">
@@ -293,6 +294,14 @@
                         <button class="btn-sm" onclick="toggleKeyVisibility('settingBaiduKey')">显示</button>
                     </div>
                     <div class="hint">从 console.bce.baidu.com 获取，免费 1500 次/月</div>
+                </div>
+                <div class="form-group">
+                    <label>豆包（火山引擎联网搜索）API Key</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="password" id="settingDoubaoKey" placeholder="9KjGFU7Ixfs3..." style="flex:1;">
+                        <button class="btn-sm" onclick="toggleKeyVisibility('settingDoubaoKey')">显示</button>
+                    </div>
+                    <div class="hint">从火山引擎联网搜索控制台获取，每月免费 500 次</div>
                 </div>
                 <div class="form-group">
                     <label>Tavily API Key</label>
@@ -338,6 +347,7 @@
                     <select id="filterEngine" onchange="loadItems()">
                         <option value="">全部引擎</option>
                         <option value="baidu">百度</option>
+                        <option value="doubao">豆包</option>
                         <option value="tavily">Tavily</option>
                     </select>
                     <select id="filterSource" onchange="loadItems()">
@@ -411,6 +421,7 @@
                 <label>搜索引擎</label>
                 <div class="checkbox-group">
                     <label><input type="checkbox" id="srcEngineBaidu" checked> 百度</label>
+                    <label><input type="checkbox" id="srcEngineDoubao"> 豆包</label>
                     <label><input type="checkbox" id="srcEngineTavily" checked> Tavily</label>
                     <label><input type="checkbox" id="srcEngineAihot"> AI HOT <span style="color:#52c41a;font-size:12px">免费</span></label>
                 </div>
@@ -531,7 +542,7 @@
     }
 
     // ── Tab 1: 搜索源管理 ─────────────────────────────────
-    var _apiKeysConfigured = { baidu: false, tavily: false };
+    var _apiKeysConfigured = { baidu: false, doubao: false, tavily: false };
 
     async function checkApiKeys() {
         try {
@@ -539,6 +550,7 @@
             var d = await res.json();
             (d.data || []).forEach(function(item) {
                 if (item.key_name === 'baidu_api_key' && item.value) _apiKeysConfigured.baidu = true;
+                if (item.key_name === 'doubao_api_key' && item.value) _apiKeysConfigured.doubao = true;
                 if (item.key_name === 'tavily_api_key' && item.value) _apiKeysConfigured.tavily = true;
             });
         } catch(e) {}
@@ -553,9 +565,10 @@
 
             // API Key 未配置警告
             var warning = '';
-            if (!_apiKeysConfigured.baidu || !_apiKeysConfigured.tavily) {
+            if (!_apiKeysConfigured.baidu || !_apiKeysConfigured.doubao || !_apiKeysConfigured.tavily) {
                 var missing = [];
                 if (!_apiKeysConfigured.baidu) missing.push('百度');
+                if (!_apiKeysConfigured.doubao) missing.push('豆包');
                 if (!_apiKeysConfigured.tavily) missing.push('Tavily');
                 warning = '<div class="api-key-warning">⚠️ ' + missing.join('、') + ' API Key 未配置，<a onclick="switchTabByName(\'settings\')">前往配置</a>。AI HOT 引擎免费免 Key 可直接使用。</div>';
             }
@@ -614,6 +627,7 @@
             document.getElementById('srcAihotMode').value = 'selected';
             document.getElementById('srcCategory').value = '';
             document.getElementById('srcEngineBaidu').checked = true;
+            document.getElementById('srcEngineDoubao').checked = false;
             document.getElementById('srcEngineTavily').checked = true;
             document.getElementById('srcEngineAihot').checked = false;
             document.getElementById('srcBaiduRecency').value = 'week';
@@ -643,6 +657,7 @@
             var engines = [];
             try { engines = JSON.parse(s.search_engines || '[]'); } catch(e) {}
             document.getElementById('srcEngineBaidu').checked = engines.indexOf('baidu') >= 0;
+            document.getElementById('srcEngineDoubao').checked = engines.indexOf('doubao') >= 0;
             document.getElementById('srcEngineTavily').checked = engines.indexOf('tavily') >= 0;
             document.getElementById('srcEngineAihot').checked = engines.indexOf('aihot') >= 0;
             document.getElementById('srcBaiduRecency').value = s.baidu_recency || 'week';
@@ -657,6 +672,7 @@
         if (!name) { showToast('请输入名称'); return; }
         var engines = [];
         if (document.getElementById('srcEngineBaidu').checked) engines.push('baidu');
+        if (document.getElementById('srcEngineDoubao').checked) engines.push('doubao');
         if (document.getElementById('srcEngineTavily').checked) engines.push('tavily');
         if (document.getElementById('srcEngineAihot').checked) engines.push('aihot');
         var body = {
@@ -823,6 +839,10 @@
                     var el = document.getElementById('settingBaiduKey');
                     if (el) el.value = item.value || '';
                 }
+                if (item.key_name === 'doubao_api_key') {
+                    var el = document.getElementById('settingDoubaoKey');
+                    if (el) el.value = item.value || '';
+                }
                 if (item.key_name === 'tavily_api_key') {
                     var el = document.getElementById('settingTavilyKey');
                     if (el) el.value = item.value || '';
@@ -838,13 +858,15 @@
 
     async function saveApiKeys() {
         var baiduKey = document.getElementById('settingBaiduKey').value.trim();
+        var doubaoKey = document.getElementById('settingDoubaoKey').value.trim();
         var tavilyKey = document.getElementById('settingTavilyKey').value.trim();
-        if (!baiduKey && !tavilyKey) {
+        if (!baiduKey && !doubaoKey && !tavilyKey) {
             showToastError('请至少填写一个 API Key');
             return;
         }
         var settings = {};
         if (baiduKey) settings['baidu_api_key'] = baiduKey;
+        if (doubaoKey) settings['doubao_api_key'] = doubaoKey;
         if (tavilyKey) settings['tavily_api_key'] = tavilyKey;
         try {
             var res = await fetch('/api/admin/settings', {
