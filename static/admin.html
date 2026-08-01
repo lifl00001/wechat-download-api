@@ -1156,18 +1156,39 @@
 
                     var detailParts = [];
                     if (data.fakeid) detailParts.push('FakeID: ' + data.fakeid);
-                    if (data.isExpired) {
+
+                    // [2026-07-05] 优先检测 RSS 轮询发现的凭证失效（微信服务端已让 cookie 过期）
+                    var loginExpired = false;
+                    try {
+                        var rssRes = await fetch('/api/rss/status');
+                        var rssData = await rssRes.json();
+                        loginExpired = rssData && rssData.data && rssData.data.login_expired;
+                    } catch (e2) { /* RSS 状态读取失败时按本地判断走 */ }
+
+                    if (loginExpired) {
+                        // 凭证已被微信服务端失效 —— 红色警告态
+                        val.textContent = '⚠️ 登录已过期';
+                        detail.textContent = '微信服务端已让凭证失效，请重新扫码登录';
+                        icon.className = 'status-icon offline';
+                        icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+                        actions.innerHTML =
+                            '<button class="btn-sm" onclick="checkStatus()">刷新</button>' +
+                            '<a href="/login.html" class="btn-sm btn-danger" style="text-decoration:none;display:inline-block;">去重新登录</a>';
+                    } else if (data.isExpired) {
                         detailParts.push('凭证可能已过期');
                         icon.className = 'status-icon offline';
                         icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#fa8c16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+                        detail.textContent = detailParts.join(' · ');
+                        actions.innerHTML =
+                            '<button class="btn-sm" onclick="checkStatus()">刷新</button>' +
+                            '<button class="btn-sm btn-danger" onclick="doLogout()">退出登录</button>';
                     } else {
                         detailParts.push(data.status);
+                        detail.textContent = detailParts.join(' · ');
+                        actions.innerHTML =
+                            '<button class="btn-sm" onclick="checkStatus()">刷新</button>' +
+                            '<button class="btn-sm btn-danger" onclick="doLogout()">退出登录</button>';
                     }
-                    detail.textContent = detailParts.join(' · ');
-
-                    actions.innerHTML =
-                        '<button class="btn-sm" onclick="checkStatus()">刷新</button>' +
-                        '<button class="btn-sm btn-danger" onclick="doLogout()">退出登录</button>';
                 } else {
                     icon.className = 'status-icon offline';
                     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';

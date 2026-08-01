@@ -45,6 +45,30 @@ class WechatInvalidFakeidError(Exception):
     pass
 
 
+class WechatLoginExpiredError(Exception):
+    """
+    [2026-07-05] 微信登录凭证已被服务端失效
+
+    触发条件：appmsgpublish 接口返回 ret=200003，或 err_msg 含 "login"
+    与本地 expire_time 无关 —— 微信服务端主动让 cookie 失效（异地登录、风控等）
+    表现：所有公众号都返回"无文章"，实际是凭证已过期
+    """
+    pass
+
+
+class WechatFreqControlError(Exception):
+    """
+    [2026-08-01] 微信接口频率限制（限频）
+
+    触发条件：appmsgpublish 接口返回 ret=200013，err_msg="freq control"
+    原因：短时间内对同一账号大量调用接口，触发微信服务端限流
+    表现：所有公众号秒回"无文章"（耗时 0.1~0.4s），ret=200013
+    处理：立即中断本轮轮询，避免继续打剩余号导致限频时间延长
+    恢复：等待 30~60 分钟后微信自动解除，期间不要发起任何请求
+    """
+    pass
+
+
 class RSSPoller:
     """后台轮询单例"""
 
@@ -58,6 +82,7 @@ class RSSPoller:
     _last_poll_time: Optional[float] = None  # 上次轮询完成时间戳
     _last_new_count: int = 0                  # 上次轮询新增文章数
     _last_poll_message: str = ""              # 上次轮询结果摘要
+    _login_expired: bool = False              # [2026-07-05] 凭证是否已被微信服务端失效
     # 内存日志缓冲（最近 500 条）
     _log_buffer: deque = deque(maxlen=500)
 
@@ -192,6 +217,8 @@ class RSSPoller:
 
     async def _poll_all(self):
         self._polling = True
+        # [2026-07-05] 每轮开始先重置凭证失效标志（若本次又失效会在循环里重新置位）
+        self._login_expired = False
         total_new = 0
         total_api_articles = 0
         poll_start = time.time()
@@ -248,6 +275,32 @@ class RSSPoller:
                             f"[{idx}/{total_count}] {nickname} 轮询结束"
                             f" | 状态=无文章 | 耗时={fakeid_elapsed:.1f}s")
                     rss_store.update_last_poll(fakeid)
+                except WechatLoginExpiredError as e:
+                    # [2026-07-05] 凭证已被微信服务端失效
+                    # 第一个号命中就立即中断整个轮询 —— 凭证失效时所有号都会失败，没必要继续
+                    self._login_expired = True
+                    self._log("WARNING",
+                        f"⚠️ [{idx}/{total_count}] {nickname} 拉取失败：微信登录已过期"
+                        f"（ret={e}）—— 中止本轮轮询，请尽快重新扫码登录")
+                    self._last_poll_message = (
+                        f"轮询中止：微信登录已过期（在 {nickname} 处检测到），"
+                        f"已轮询 {idx}/{total_count}，请重新扫码登录"
+                    )
+                    # 异步发通知（邮件 + webhook，不阻塞）
+                    asyncio.create_task(self._notify_login_expired(nickname, idx, total_count))
+                    break
+                except WechatFreqControlError as e:
+                    # [2026-08-01] 微信限频：立即中断整轮轮询
+                    # 继续打剩下的号只会延长限频时间（每个号都会被秒拒）
+                    self._log("WARNING",
+                        f"⚠️ [{idx}/{total_count}] {nickname} 触发微信限频"
+                        f"（ret=200013 freq control）—— 中止本轮轮询，"
+                        f"请等待 30~60 分钟后再试，期间不要发起任何请求")
+                    self._last_poll_message = (
+                        f"轮询中止：微信接口限频（在 {nickname} 处检测到），"
+                        f"已轮询 {idx}/{total_count}，请等待 30~60 分钟后重试"
+                    )
+                    break
                 except WechatInvalidFakeidError as e:
                     # [2026-05-18] 同步 SaaS 修复：fakeid 在微信侧已失效，自动加入黑名单
                     self._log("WARNING",
@@ -261,7 +314,15 @@ class RSSPoller:
                         self._log("WARNING", f"加入黑名单失败 {nickname}: {bl_err}")
                 except Exception as e:
                     self._log("ERROR", f"[{idx}/{total_count}] {nickname} 轮询异常: {e}")
-                await asyncio.sleep(3)
+                # [2026-08-01] 分批轮询：每 10 个号为一批，批次间暂停 60 秒
+                # 单号间隔从 3s 加大到 8s，模拟人工浏览节奏，降低触发微信限频的概率
+                if idx % 10 == 0 and idx < len(active_fakeids):
+                    self._log("INFO",
+                        f"⏸️ 已轮询 {idx}/{total_count}，分批暂停 60 秒后继续"
+                        f"（防止单 IP 高频请求触发微信限频）")
+                    await asyncio.sleep(60)
+                else:
+                    await asyncio.sleep(8)
 
             elapsed = time.time() - poll_start
             self._last_new_count = total_new
@@ -273,6 +334,46 @@ class RSSPoller:
         finally:
             self._polling = False
             self._last_poll_time = time.time()
+
+    async def _notify_login_expired(self, nickname: str, idx: int, total: int):
+        """[2026-07-05] 凭证失效时发邮件 + webhook 通知"""
+        from utils.email_notifier import email_notifier
+        from utils.webhook import webhook
+        from datetime import datetime
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        summary = f"微信登录已过期 · {ts}"
+
+        # 邮件（HTML）
+        html = f"""
+        <div style="font-family:'Microsoft YaHei',Arial,sans-serif;max-width:560px;margin:0 auto;
+                    border:1px solid #ffa39e;border-radius:8px;overflow:hidden;">
+          <div style="background:#fff1f0;color:#cf1322;padding:16px 20px;font-size:16px;font-weight:bold;">
+            ⚠️ 微信公众号登录已过期
+          </div>
+          <div style="padding:20px;color:#333;line-height:1.8;font-size:14px;">
+            <p>RSS 轮询在拉取公众号 <b>{nickname}</b> 时，检测到微信服务端已让凭证失效。</p>
+            <table style="border-collapse:collapse;margin:12px 0;">
+              <tr><td style="padding:4px 12px;color:#888;">检测时间</td><td>{ts}</td></tr>
+              <tr><td style="padding:4px 12px;color:#888;">检测位置</td><td>{idx}/{total} {nickname}</td></tr>
+              <tr><td style="padding:4px 12px;color:#888;">影响</td><td>本轮轮询已中止，所有公众号无法拉取</td></tr>
+            </table>
+            <p style="background:#e6f7ff;border-left:3px solid #1890ff;padding:10px 14px;margin:12px 0;">
+              请尽快打开管理后台扫码重新登录：<br>
+              <a href="http://localhost:5000/login.html">http://localhost:5000/login.html</a>
+            </p>
+          </div>
+        </div>
+        """
+        await email_notifier.notify(summary, html)
+
+        # webhook（企业微信等，已配置才发）
+        await webhook.notify("login_expired", {
+            "nickname": nickname,
+            "detected_at": idx,
+            "total": total,
+            "message": f"RSS轮询检测到微信登录已过期（{nickname}），请重新扫码登录",
+        })
 
     async def _fetch_article_list(self, fakeid: str, creds: Dict) -> List[Dict]:
         params = {
@@ -322,6 +423,20 @@ class RSSPoller:
             err_msg = base_resp.get("err_msg", "")
             logger.warning("WeChat API error for %s: ret=%s err_msg=%r",
                            fakeid[:8], ret_code, err_msg)
+            # [2026-07-05] 凭证失效检测：ret=200003 或 err_msg 含 "login"
+            # 微信服务端主动让 cookie 失效（异地登录/风控），本地 expire_time 可能尚未到期
+            # 必须在 200002 之前判定，避免被静默 return [] 当成"无文章"
+            if ret_code == 200003 or "login" in err_msg.lower():
+                raise WechatLoginExpiredError(
+                    f"微信登录已过期: ret={ret_code}, err_msg={err_msg}"
+                )
+            # [2026-08-01] 限频检测：ret=200013 + "freq control"
+            # 微信对短时间内大量调用接口触发限流，所有公众号都会被拒
+            # 必须立即中断整轮轮询，否则只会延长限频时间
+            if ret_code == 200013 or "freq control" in err_msg.lower():
+                raise WechatFreqControlError(
+                    f"微信接口限频: ret={ret_code}, err_msg={err_msg}"
+                )
             # [2026-05-18] 同步 SaaS 修复：ret=200002 + "invalid args" → fakeid 已失效
             # 老代码统一返回空 → 静默失败，用户感受不到该号已注销
             # 现在：抛 WechatInvalidFakeidError 让调用方加入黑名单

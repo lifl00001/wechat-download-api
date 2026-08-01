@@ -225,6 +225,7 @@ async def poller_status():
             "last_poll_time": rss_poller._last_poll_time,
             "last_new_count": rss_poller._last_new_count,
             "last_poll_message": rss_poller._last_poll_message,
+            "login_expired": rss_poller._login_expired,
         },
     )
 
