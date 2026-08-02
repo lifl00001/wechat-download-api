@@ -564,6 +564,18 @@
             <div class="search-results" id="searchResults"></div>
         </div>
 
+        <div class="add-section">
+            <h2>粘贴链接抓取 <span style="font-size:var(--font-xs);color:var(--success-color);font-weight:400;">免登录 · 零风险</span></h2>
+            <div style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:var(--space-sm);">
+                粘贴微信文章链接（每行一个），直接抓取全文入库。不依赖微信登录态，不会被封。
+            </div>
+            <textarea id="urlInput" rows="5" placeholder="每行粘贴一个微信文章链接，例如：&#10;https://mp.weixin.qq.com/s/xxxxxxxxxx&#10;https://mp.weixin.qq.com/s?__biz=xxx&mid=xxx&idx=1&sn=xxx&#10;&#10;支持从微信「复制链接」直接粘贴" style="width:100%;padding:var(--space-sm);border:1px solid var(--border-base);border-radius:var(--radius-base);font-size:var(--font-sm);font-family:monospace;resize:vertical;margin-bottom:var(--space-sm);box-sizing:border-box;"></textarea>
+            <div style="display:flex;gap:var(--space-sm);align-items:center;">
+                <button class="btn btn-primary" id="fetchUrlsBtn" onclick="doFetchByUrls()">抓取入库</button>
+                <span id="fetchResult" style="font-size:var(--font-xs);color:var(--text-muted);"></span>
+            </div>
+        </div>
+
         <div class="sub-section">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md);">
                 <h2 style="margin-bottom:0;">我的订阅</h2>
@@ -895,6 +907,43 @@
         function doExport(format) {
             document.getElementById('exportMenu').style.display = 'none';
             window.location.href = '/api/rss/export?format=' + format;
+        }
+
+        async function doFetchByUrls() {
+            var text = document.getElementById('urlInput').value.trim();
+            if (!text) { showToast('请粘贴至少一个微信文章链接'); return; }
+
+            var btn = document.getElementById('fetchUrlsBtn');
+            var result = document.getElementById('fetchResult');
+            btn.disabled = true;
+            btn.textContent = '抓取中...';
+            result.textContent = '';
+            result.style.color = 'var(--text-muted)';
+
+            var urls = text.split('\n').filter(function(u) { return u.trim(); });
+            try {
+                var res = await fetch('/api/rss/fetch-by-urls', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urls: urls }),
+                });
+                var d = await res.json();
+                if (d.saved > 0) {
+                    result.textContent = d.message;
+                    result.style.color = 'var(--success-color)';
+                    document.getElementById('urlInput').value = '';
+                    loadSubscriptions();
+                } else {
+                    result.textContent = d.message || '抓取失败，请检查链接是否有效';
+                    result.style.color = 'var(--error-color)';
+                }
+            } catch (e) {
+                result.textContent = '网络错误: ' + e.message;
+                result.style.color = 'var(--error-color)';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '抓取入库';
+            }
         }
 
         document.addEventListener('click', function(e) {

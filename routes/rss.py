@@ -16,7 +16,7 @@ import time
 import logging
 from datetime import datetime, timezone
 from html import escape as html_escape
-from typing import Optional
+from typing import Optional, List
 import xml.etree.ElementTree as ET
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -356,3 +356,167 @@ def _rfc822(ts: int) -> str:
         return ""
     dt = datetime.fromtimestamp(ts, tz=timezone.utc)
     return dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
+
+
+# ── 手动粘贴链接抓取 ───────────────────────────────────────
+
+class FetchByUrlsRequest(BaseModel):
+    """批量粘贴文章链接抓取"""
+    urls: List[str] = Field(..., description="微信文章链接列表（每行一个）")
+    fakeid: str = Field("", description="目标公众号 fakeid（可选，留空则自动从文章中提取）")
+    nickname: str = Field("", description="公众号名称（新建订阅时用，可选）")
+
+
+@router.post("/rss/fetch-by-urls", summary="批量粘贴链接抓取文章")
+async def fetch_by_urls(req: FetchByUrlsRequest):
+    """
+    手动粘贴微信文章链接，批量抓取全文并入库。
+    不依赖微信登录态，直接访问公开文章页面，风险极低。
+
+    - 如果指定了 fakeid，文章归属到该公众号
+    - 如果未指定 fakeid，从文章 HTML 中自动提取公众号信息
+    """
+    from utils.article_fetcher import fetch_articles_batch
+    from utils.helpers import extract_article_info, parse_article_url, has_article_content
+    from utils import auth_manager
+
+    # 清洗 URL 列表
+    raw_urls = req.urls
+    clean_urls = []
+    for u in raw_urls:
+        u = u.strip()
+        if not u:
+            continue
+        # 支持纯链接和带文字的行，提取其中的 mp.weixin.qq.com 链接
+        if "mp.weixin.qq.com/s" in u:
+            # 提取完整 URL（去掉多余的空格和换行）
+            start = u.index("https://") if "https://" in u else u.index("http://")
+            clean_urls.append(u[start:])
+        elif "mp.weixin.qq.com" in u:
+            clean_urls.append(u)
+
+    if not clean_urls:
+        return {"success": False, "saved": 0, "message": "未找到有效的微信文章链接（需包含 mp.weixin.qq.com）"}
+
+    # 去重
+    seen = set()
+    urls = []
+    for u in clean_urls:
+        if u not in seen:
+            seen.add(u)
+            urls.append(u)
+
+    logger.info("开始批量抓取 %d 篇文章（粘贴链接模式）", len(urls))
+
+    # 获取凭证（可选，带凭证能抓到更多内容，但不带也能抓公开文章）
+    creds = {}
+    try:
+        c = auth_manager.get_credentials()
+        if c and c.get("token") and c.get("cookie"):
+            creds = c
+    except Exception:
+        pass
+
+    # 批量抓取 HTML
+    results = await fetch_articles_batch(
+        urls,
+        max_concurrency=3,
+        timeout=30,
+        wechat_token=creds.get("token"),
+        wechat_cookie=creds.get("cookie"),
+    )
+
+    # 解析 HTML 并组装 article dicts
+    # 预加载已有订阅列表，用于按公众号名匹配真实 fakeid（保证和自动轮询数据一致）
+    existing_subs = {}
+    try:
+        for s in rss_store.list_subscriptions():
+            if s.get("nickname"):
+                existing_subs[s["nickname"]] = s["fakeid"]
+    except Exception:
+        pass
+
+    articles_by_fakeid = {}  # {fakeid: [article_dict, ...]}
+    sub_info = {}            # {fakeid: {nickname, head_img}}
+    failed = []
+
+    for url in urls:
+        html = results.get(url)
+        if not html or not has_article_content(html):
+            failed.append(url)
+            logger.warning("抓取失败（无正文）: %s", url[:80])
+            continue
+
+        params = parse_article_url(url) or {}
+        info = extract_article_info(html, params)
+        author = info.get("author", "") or "未知公众号"
+
+        # 确定 fakeid（兼容自动轮询，避免重复）：
+        # 1. 用户手动指定 → 用指定的
+        # 2. 已订阅的公众号名 → 用订阅表里的真实 fakeid（和自动轮询完全一致）
+        # 3. 都没有 → 用公众号名作为 fakeid（后续可通过订阅表自动合并）
+        fakeid = req.fakeid or ""
+        if not fakeid and author in existing_subs:
+            fakeid = existing_subs[author]
+            logger.info("按名称匹配订阅: %s → fakeid=%s", author, fakeid[:12])
+        if not fakeid:
+            fakeid = info.get("__biz", "") or author
+
+        if fakeid not in sub_info:
+            sub_info[fakeid] = {"nickname": author, "head_img": ""}
+
+        # 图片代理处理（和自动轮询保持一致，解决微信 mmbiz 防盗链）
+        from utils.content_processor import process_article_content
+        site_url = os.getenv("SITE_URL", "http://localhost:5000").rstrip("/")
+        processed = process_article_content(html, proxy_base_url=site_url)
+
+        article = {
+            "aid": params.get("mid", ""),
+            "title": info.get("title", ""),
+            "link": url,
+            "digest": (processed.get("plain_content", "") or "")[:500],
+            "cover": (processed.get("images") or [""])[0] if processed.get("images") else "",
+            "author": author,
+            "content": processed.get("content", ""),
+            "plain_content": processed.get("plain_content", ""),
+            "publish_time": info.get("publish_time", 0),
+        }
+        articles_by_fakeid.setdefault(fakeid, []).append(article)
+
+    # 确保订阅存在，然后保存文章
+    total_saved = 0
+    saved_details = []
+    for fakeid, articles in articles_by_fakeid.items():
+        info = sub_info.get(fakeid, {})
+        # 创建/确保订阅存在（fakeid 可能是 __biz 或手动指定）
+        try:
+            rss_store.add_subscription(
+                fakeid=fakeid,
+                nickname=info.get("nickname", ""),
+                head_img=info.get("head_img", ""),
+            )
+        except Exception as e:
+            logger.warning("创建订阅失败 %s: %s", fakeid[:12], e)
+
+        # source='poll'：和自动轮询完全一致，避免同一篇文章因 source 不同而重复
+        saved = rss_store.save_articles(fakeid, articles, source="poll")
+        total_saved += saved
+        saved_details.append({
+            "fakeid": fakeid,
+            "nickname": info.get("nickname", ""),
+            "saved": saved,
+            "total": len(articles),
+        })
+
+    msg = f"抓取完成 | 共 {len(urls)} 篇 | 成功入库 {total_saved} 篇"
+    if failed:
+        msg += f" | 失败 {len(failed)} 篇"
+
+    return {
+        "success": total_saved > 0,
+        "saved": total_saved,
+        "total": len(urls),
+        "failed_count": len(failed),
+        "details": saved_details,
+        "message": msg,
+    }
