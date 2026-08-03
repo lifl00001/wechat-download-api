@@ -14,9 +14,8 @@
 
 services:
   wechat-api:
-    image: tmwgsicp/wechat-download-api:latest
-    # Or build locally:
-    # build: .
+    # 本地构建（含所有自定义改动：豆包搜索、粘贴链接抓取等）
+    build: .
     container_name: wechat-download-api
     restart: unless-stopped
     ports:
