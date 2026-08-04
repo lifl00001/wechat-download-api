@@ -37,9 +37,10 @@ def proxy_image_url(url: str, base_url: str) -> str:
         return url
     
     # 只代理微信 CDN 的图片
+    # 使用相对路径 /api/image，兼容 HTTP 和 HTTPS 前端页面（避免 Mixed Content 拦截）
     if "mmbiz.qpic.cn" in url or "mmbiz.qlogo.cn" in url or "wx.qlogo.cn" in url:
-        return f"{base_url.rstrip('/')}/api/image?url={quote(url, safe='')}"
-    
+        return f"/api/image?url={quote(url, safe='')}"
+
     return url
 
 
