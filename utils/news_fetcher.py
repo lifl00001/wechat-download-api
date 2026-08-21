@@ -595,15 +595,23 @@ class NewsSearcher:
         return cls._instance
 
     async def start(self):
-        if self._running:
+        # 如果正在运行且任务存活，直接返回
+        if self._running and self._task and not self._task.done():
             return
-        self._running = True
+        # 如果正在运行但任务已死（异常退出），先清理状态
+        if self._running and self._task and self._task.done():
+            logger.warning("News searcher task died unexpectedly, restarting...")
+            self._log("WARNING", "搜索任务异常退出，正在重启...")
+            self._task = None
+        elif not self._running:
+            self._running = True
+        # 创建新任务
         self._task = asyncio.create_task(self._loop())
-        scheduled = self._get_scheduled_time()
+        scheduled = self._get_scheduled_time_safe()
         if scheduled:
             logger.info("News searcher started (scheduled=%s)", scheduled)
         else:
-            logger.info("News searcher started (interval=%ds)", self._get_interval())
+            logger.info("News searcher started (interval=%ds)", self._get_interval_safe())
 
     async def stop(self):
         self._running = False
@@ -645,35 +653,56 @@ class NewsSearcher:
         """获取定时执行时间（HH:MM），为空则按间隔执行"""
         return settings_manager.get("news_scheduled_time", "").strip()
 
+    def _get_scheduled_time_safe(self) -> str:
+        """安全版本：捕获所有异常，返回空字符串"""
+        try:
+            return self._get_scheduled_time()
+        except Exception as e:
+            logger.error("Failed to get scheduled time: %s", e)
+            return ""
+
+    def _get_interval_safe(self) -> int:
+        """安全版本：捕获所有异常，返回默认间隔"""
+        try:
+            return self._get_interval()
+        except Exception as e:
+            logger.error("Failed to get interval: %s", e)
+            return 21600  # 默认 6 小时
+
     def _calc_sleep_seconds(self) -> float:
         """
         计算下一次搜索的等待秒数。
         1. 设置了定时时间（HH:MM）→ 计算到下一个该时间点的秒数（兜底 86400s）
         2. 未设置 → 使用间隔
+        异常时返回默认间隔（6小时）
         """
-        scheduled = self._get_scheduled_time()
-        if scheduled:
-            try:
-                parts = scheduled.split(":")
-                hour, minute = int(parts[0]), int(parts[1])
-                from datetime import timedelta
-                now = datetime.now()
-                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                if target <= now:
-                    target += timedelta(days=1)
-                sleep_secs = (target - now).total_seconds()
-                backup = 86400
-                if sleep_secs <= 0 or sleep_secs > backup:
-                    logger.warning("News scheduled sleep %ds out of range, using backup %d",
-                                   sleep_secs, backup)
-                    return float(backup)
-                logger.info("Next scheduled news search at %s (in %ds)",
-                            target.strftime("%Y-%m-%d %H:%M"), int(sleep_secs))
-                return sleep_secs
-            except (ValueError, IndexError) as e:
-                logger.warning("Invalid news scheduled time '%s': %s, falling back to interval",
-                               scheduled, e)
-        return float(self._get_interval())
+        try:
+            scheduled = self._get_scheduled_time_safe()
+            if scheduled:
+                try:
+                    parts = scheduled.split(":")
+                    hour, minute = int(parts[0]), int(parts[1])
+                    from datetime import timedelta
+                    now = datetime.now()
+                    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    if target <= now:
+                        target += timedelta(days=1)
+                    sleep_secs = (target - now).total_seconds()
+                    backup = 86400
+                    if sleep_secs <= 0 or sleep_secs > backup:
+                        logger.warning("News scheduled sleep %ds out of range, using backup %d",
+                                       sleep_secs, backup)
+                        return float(backup)
+                    logger.info("Next scheduled news search at %s (in %ds)",
+                                target.strftime("%Y-%m-%d %H:%M"), int(sleep_secs))
+                    return sleep_secs
+                except (ValueError, IndexError) as e:
+                    logger.warning("Invalid news scheduled time '%s': %s, falling back to interval",
+                                   scheduled, e)
+            return float(self._get_interval_safe())
+        except Exception as e:
+            logger.error("Failed to calculate sleep seconds: %s, using default 6h", e)
+            return 21600.0  # 默认 6 小时
 
     async def _run_cycle(self):
         """执行一次搜索并更新状态/日志，返回 (源数, 新增条数)"""
@@ -692,12 +721,22 @@ class NewsSearcher:
         first = True
         while self._running:
             # 定时模式：首次启动先等待到定时时间，不立即搜索
-            if first and self._get_scheduled_time():
+            if first and self._get_scheduled_time_safe():
                 first = False
-                sleep_secs = self._calc_sleep_seconds()
-                self._next_run_at = time.time() + sleep_secs
-                self._log("INFO", f"定时模式，等待 {int(sleep_secs)}s 后执行首次搜索")
-                await asyncio.sleep(sleep_secs)
+                try:
+                    sleep_secs = self._calc_sleep_seconds()
+                    self._next_run_at = time.time() + sleep_secs
+                    self._log("INFO", f"定时模式，等待 {int(sleep_secs)}s 后执行首次搜索")
+                    await asyncio.sleep(sleep_secs)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error("Failed to calculate initial sleep: %s", e)
+                    self._log("ERROR", f"计算初始等待时间失败: {e}")
+                    # 使用默认间隔继续
+                    sleep_secs = 21600.0
+                    self._next_run_at = time.time() + sleep_secs
+                    await asyncio.sleep(sleep_secs)
                 continue
             first = False
             try:
@@ -707,8 +746,15 @@ class NewsSearcher:
             except Exception as e:
                 logger.error("News search cycle error: %s", e, exc_info=True)
                 self._log("ERROR", f"搜索周期异常: {e}")
-            sleep_secs = self._calc_sleep_seconds()
-            self._next_run_at = time.time() + sleep_secs
+            # 计算下次运行时间，确保任何异常都不会杀死循环
+            try:
+                sleep_secs = self._calc_sleep_seconds()
+                self._next_run_at = time.time() + sleep_secs
+            except Exception as e:
+                logger.error("Failed to calculate sleep seconds: %s, using default 6h", e)
+                self._log("ERROR", f"计算下次运行时间失败: {e}")
+                sleep_secs = 21600.0
+                self._next_run_at = time.time() + sleep_secs
             try:
                 await asyncio.sleep(sleep_secs)
             except asyncio.CancelledError:
@@ -718,14 +764,18 @@ class NewsSearcher:
         """手动触发一次搜索，返回 (源数, 新增条数)"""
         source_count, item_count = await self._run_cycle()
         # 手动触发后，重新计算下次运行时间供倒计时显示
-        sleep_secs = self._calc_sleep_seconds()
-        self._next_run_at = time.time() + sleep_secs
+        try:
+            sleep_secs = self._calc_sleep_seconds()
+            self._next_run_at = time.time() + sleep_secs
+        except Exception as e:
+            logger.error("Failed to calculate next run after manual search: %s", e)
+            self._next_run_at = time.time() + 21600.0
         return source_count, item_count
 
     def get_status(self) -> Dict:
         """获取搜索器状态"""
-        interval = self._get_interval()
-        scheduled = self._get_scheduled_time()
+        interval = self._get_interval_safe()
+        scheduled = self._get_scheduled_time_safe()
         db_status = news_store.get_search_status()
         return {
             "running": self._running,

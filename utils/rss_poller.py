@@ -92,20 +92,28 @@ class RSSPoller:
         return cls._instance
 
     async def start(self):
-        if self._running:
+        # 如果正在运行且任务存活，直接返回
+        if self._running and self._task and not self._task.done():
             return
-        self._running = True
+        # 如果正在运行但任务已死（异常退出），先清理状态
+        if self._running and self._task and self._task.done():
+            logger.warning("RSS poller task died unexpectedly, restarting...")
+            self._log("WARNING", "RSS 轮询任务异常退出，正在重启...")
+            self._task = None
+        elif not self._running:
+            self._running = True
         # 创建长连接 client，连接池 + keep-alive 自动复用
-        self._http_client = httpx.AsyncClient(
-            timeout=30.0,
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-        )
+        if not self._http_client:
+            self._http_client = httpx.AsyncClient(
+                timeout=30.0,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            )
         self._task = asyncio.create_task(self._loop())
-        scheduled = self._get_scheduled_time()
+        scheduled = self._get_scheduled_time_safe()
         if scheduled:
             logger.info("RSS poller started (scheduled=%s)", scheduled)
         else:
-            logger.info("RSS poller started (interval=%ds)", self._get_poll_interval())
+            logger.info("RSS poller started (interval=%ds)", self._get_poll_interval_safe())
 
     async def stop(self):
         self._running = False
@@ -154,6 +162,22 @@ class RSSPoller:
         """获取定时执行时间（HH:MM格式），为空则按间隔轮询"""
         return settings_manager.get("rss_scheduled_time", "").strip()
 
+    def _get_scheduled_time_safe(self) -> str:
+        """安全版本：捕获所有异常，返回空字符串"""
+        try:
+            return self._get_scheduled_time()
+        except Exception as e:
+            logger.error("Failed to get RSS scheduled time: %s", e)
+            return ""
+
+    def _get_poll_interval_safe(self) -> int:
+        """安全版本：捕获所有异常，返回默认间隔"""
+        try:
+            return self._get_poll_interval()
+        except Exception as e:
+            logger.error("Failed to get RSS poll interval: %s", e)
+            return POLL_INTERVAL
+
     def _get_articles_per_poll(self) -> int:
         """动态获取每次拉取文章数"""
         return settings_manager.get_int("articles_per_poll", ARTICLES_PER_POLL)
@@ -170,50 +194,76 @@ class RSSPoller:
         1. 如果设置了定时执行时间（HH:MM），则计算到下一个该时间点的秒数
            - 若计算结果 <= 0 或 > 备用间隔，使用备用间隔兜底
         2. 如果没有设置定时执行时间，使用轮询间隔
+        异常时返回默认间隔（1小时）
         """
-        scheduled = self._get_scheduled_time()
+        try:
+            scheduled = self._get_scheduled_time_safe()
 
-        if scheduled:
-            try:
-                parts = scheduled.split(":")
-                hour, minute = int(parts[0]), int(parts[1])
-                from datetime import datetime, timedelta
-                now = datetime.now()
-                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                # 如果今天的执行时间已过，设为明天
-                if target <= now:
-                    target += timedelta(days=1)
-                sleep_secs = (target - now).total_seconds()
-                backup = 86400  # 兜底：最大 24 小时
-                # 异常值兜底：超过 24 小时或 <= 0 时用兜底值
-                if sleep_secs <= 0 or sleep_secs > backup:
-                    logger.warning("Scheduled sleep %ds out of range, using backup interval %ds",
-                                   sleep_secs, backup)
-                    return float(backup)
-                logger.info("Next scheduled poll at %s (in %ds)", target.strftime("%Y-%m-%d %H:%M"), int(sleep_secs))
-                return sleep_secs
-            except (ValueError, IndexError) as e:
-                logger.warning("Invalid scheduled time format '%s': %s, falling back to interval", scheduled, e)
+            if scheduled:
+                try:
+                    parts = scheduled.split(":")
+                    hour, minute = int(parts[0]), int(parts[1])
+                    from datetime import datetime, timedelta
+                    now = datetime.now()
+                    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    # 如果今天的执行时间已过，设为明天
+                    if target <= now:
+                        target += timedelta(days=1)
+                    sleep_secs = (target - now).total_seconds()
+                    backup = 86400  # 兜底：最大 24 小时
+                    # 异常值兜底：超过 24 小时或 <= 0 时用兜底值
+                    if sleep_secs <= 0 or sleep_secs > backup:
+                        logger.warning("Scheduled sleep %ds out of range, using backup interval %ds",
+                                       sleep_secs, backup)
+                        return float(backup)
+                    logger.info("Next scheduled poll at %s (in %ds)", target.strftime("%Y-%m-%d %H:%M"), int(sleep_secs))
+                    return sleep_secs
+                except (ValueError, IndexError) as e:
+                    logger.warning("Invalid scheduled time format '%s': %s, falling back to interval", scheduled, e)
 
-        return float(self._get_poll_interval())
+            return float(self._get_poll_interval_safe())
+        except Exception as e:
+            logger.error("Failed to calculate RSS sleep seconds: %s, using default 1h", e)
+            return 3600.0  # 默认 1 小时
 
     async def _loop(self):
         first = True
         while self._running:
             # 定时模式：首次启动时先等待到定时时间，不立即轮询
-            if first and self._get_scheduled_time():
+            if first and self._get_scheduled_time_safe():
                 first = False
-                sleep_secs = self._calc_sleep_seconds()
-                self._log("INFO", f"定时模式，等待 {int(sleep_secs)}s 后执行首次轮询")
-                await asyncio.sleep(sleep_secs)
+                try:
+                    sleep_secs = self._calc_sleep_seconds()
+                    self._log("INFO", f"定时模式，等待 {int(sleep_secs)}s 后执行首次轮询")
+                    await asyncio.sleep(sleep_secs)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error("Failed to calculate initial RSS sleep: %s", e)
+                    self._log("ERROR", f"计算初始等待时间失败: {e}")
+                    # 使用默认间隔继续
+                    sleep_secs = 3600.0
+                    await asyncio.sleep(sleep_secs)
                 continue
             first = False
             try:
                 await self._poll_all()
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 logger.error("RSS poll cycle error: %s", e, exc_info=True)
-            sleep_secs = self._calc_sleep_seconds()
-            await asyncio.sleep(sleep_secs)
+                self._log("ERROR", f"RSS 轮询异常: {e}")
+            # 计算下次运行时间，确保任何异常都不会杀死循环
+            try:
+                sleep_secs = self._calc_sleep_seconds()
+            except Exception as e:
+                logger.error("Failed to calculate RSS sleep seconds: %s, using default 1h", e)
+                self._log("ERROR", f"计算下次运行时间失败: {e}")
+                sleep_secs = 3600.0
+            try:
+                await asyncio.sleep(sleep_secs)
+            except asyncio.CancelledError:
+                break
 
     async def _poll_all(self):
         self._polling = True
